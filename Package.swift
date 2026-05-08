@@ -35,7 +35,9 @@ var packageDependencies: [Package.Dependency] = [
     .package(url: "https://github.com/open-telemetry/opentelemetry-swift-core.git", from: "2.3.0"),
     .package(url: "https://github.com/scinfu/SwiftSoup.git", from: "2.13.2"),
     // Production graph must resolve to the published tag set that is known to build together.
-    .package(url: "https://github.com/christopherkarani/Wax.git", exact: "0.1.20"),
+    // Wax is path-resolved via Vendor/Wax sibling. We don't carry patches but
+    // vendor it for cohort consistency (see vendor-cohort-forking skill).
+    .package(path: "../Wax"),
     // Conduit is resolved by path-based sibling (Vendor/Conduit) carrying
     // OneApp Anthropic provider patches on our fork's main. See OneWorkspace
     // skill `vendor-cohort-forking` for why we vendor the cohort instead of
@@ -50,7 +52,10 @@ var packageDependencies: [Package.Dependency] = [
         ]
     ),
     .package(url: "https://github.com/christopherkarani/ContextCore.git", exact: "1.0.0"),
-    .package(url: "https://github.com/christopherkarani/Membrane", exact: "0.1.3"),
+    // Membrane is path-resolved via Vendor/Membrane sibling — its main now
+    // path-pins Conduit so the cohort graph stays free of upstream Conduit
+    // URLs (avoids SwiftPM "Conflicting identity for conduit" warnings).
+    .package(path: "../Membrane"),
     .package(url: "https://github.com/christopherkarani/Hive", exact: "0.2.0"),
 ]
 
