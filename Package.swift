@@ -36,8 +36,13 @@ var packageDependencies: [Package.Dependency] = [
     .package(url: "https://github.com/scinfu/SwiftSoup.git", from: "2.13.2"),
     // Production graph must resolve to the published tag set that is known to build together.
     .package(url: "https://github.com/christopherkarani/Wax.git", exact: "0.1.20"),
+    // Pin to objectiveous/Conduit fork carrying OneApp Anthropic provider
+    // fixes (input_schema $ref dereference, etc.). See OneWorkspace bead
+    // one-8h1.12 for the umbrella; the fork's 0.3.14 tag tracks upstream
+    // 0.3.14 + the OneApp patches. PRs back upstream are filed from the
+    // fork's `oneapp/*` branches.
     .package(
-        url: "https://github.com/christopherkarani/Conduit",
+        url: "https://github.com/objectiveous/Conduit",
         exact: "0.3.14",
         traits: [
             .trait(name: "OpenAI"),
