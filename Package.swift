@@ -34,11 +34,18 @@ var packageDependencies: [Package.Dependency] = [
     .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.11.0"),
     .package(url: "https://github.com/open-telemetry/opentelemetry-swift-core.git", from: "2.3.0"),
     .package(url: "https://github.com/scinfu/SwiftSoup.git", from: "2.13.2"),
-    // Production graph must resolve to the published tag set that is known to build together.
-    .package(url: "https://github.com/christopherkarani/Wax.git", exact: "0.1.20"),
+    // Cohort dependencies resolve by sibling path inside OneWorkspace so the
+    // objectiveous forks are the single source of truth and SwiftPM does not
+    // mix upstream URL pins with local fork pins.
     .package(
-        url: "https://github.com/christopherkarani/Conduit",
-        exact: "0.3.14",
+        path: "../Wax",
+        traits: [
+            .trait(name: "MiniLMEmbeddings"),
+            .trait(name: "ArcticEmbeddings"),
+        ]
+    ),
+    .package(
+        path: "../Conduit",
         traits: [
             .trait(name: "OpenAI"),
             .trait(name: "OpenRouter"),
@@ -47,7 +54,7 @@ var packageDependencies: [Package.Dependency] = [
         ]
     ),
     .package(url: "https://github.com/christopherkarani/ContextCore.git", exact: "1.0.0"),
-    .package(url: "https://github.com/christopherkarani/Membrane", exact: "0.1.3"),
+    .package(path: "../Membrane"),
     .package(url: "https://github.com/christopherkarani/Hive", exact: "0.2.0"),
 ]
 
