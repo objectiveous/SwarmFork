@@ -9,47 +9,229 @@ Get a working Swarm agent in under a minute.
 Add Swarm to your `Package.swift`:
 
 ```swift
+// Lean default (core + Foundation Models). No Integrations trait.
 dependencies: [
-    .package(url: "https://github.com/christopherkarani/Swarm.git", from: "0.5.1")
+    .package(url: "https://github.com/christopherkarani/Swarm.git", from: "0.6.6")
 ],
 targets: [
     .target(name: "YourApp", dependencies: ["Swarm"])
 ]
 ```
 
-### Xcode
+### Upgrading / Integrations trait
 
-**File → Add Package Dependencies →** `https://github.com/christopherkarani/Swarm.git`
+The **`Integrations`** SwiftPM trait is **off by default**. A trait-free
+`.package(...)` is the lean link: core Swarm + on-device Foundation Models.
 
-## Your First Agent
+Enable Integrations when you need any of:
 
-The primary way to create an agent is with the `Agent` struct initializer. The canonical init takes an unlabeled instructions string and a `@ToolBuilder` trailing closure for tools:
+| Capability | Without Integrations (lean) | With `traits: ["Integrations"]` |
+|------------|----------------------------|----------------------------------|
+| Default agent memory | `SlidingWindowMemory` | ContextCore + Wax `DefaultAgentMemory` |
+| Durable Hive checkpoint/resume | Configuration type-checks; factories warn immediately; execute with checkpoint/resume configured throws | Full durable engine |
+| Membrane adapters | No-op / unavailable backends | Real Membrane session adapters (`import Swarm`; do not take a `SwarmMembrane` dependency — that product is deprecated and will be removed in 0.7.0) |
+| Web helpers (`websearch`, page fetch/HTML parse) | Not injected / gated | Full web tool support |
+
+```swift
+.package(
+    url: "https://github.com/christopherkarani/Swarm.git",
+    from: "0.6.6",
+    traits: ["Integrations"]
+)
+```
+
+HiveCore, Membrane, and ContextCore are native in-tree modules under Swarm
+`Sources/` (internal targets, not separate products). Wax remains an external
+package and is linked only with Integrations. Omitting the trait does **not**
+link Integrations modules into your app. Lean resolve never pulls
+Hive/Membrane/ContextCore/Conduit **package identities**, and trait-gated
+product edges also keep Wax, MetalANNS→GRDB, swift-crypto, swift-mutex,
+SwiftSoup, the MCP Swift SDK, and OpenTelemetry off the lean pin list. Default
+remotes are **swift-syntax** (via the default-on **Macros** trait) and
+**swift-log**. Enable `traits: ["MCP"]` for `SwarmMCP`, or
+`traits: ["OpenTelemetry"]` for `SwarmOpenTelemetry`. The root-only
+`SWARM_OMIT_INTEGRATION_TARGETS=1` helper also removes the in-tree integration
+targets and their package-dependency block for lean root-package verification.
+Disable Macros with `traits: []` to drop swift-syntax. `SWARM_CORE_ONLY=1`
+drops the integration package block entirely.
+
+**Platform note:** ContextCore and the full Membrane session stack link on
+all platforms with Integrations. Linux uses portable CPU scoring/compression
+engines, the brute-force vector index, hash embeddings, and
+passthrough/in-memory Membrane backends, so `Agent.makeDefaultMemory()` still
+returns `DefaultAgentMemory` (ContextCore + Wax) there. Apple builds
+accelerate the same stack with Metal/CoreML/Accelerate and MetalANNS.
+
+**Embeddings:** the CoreML MiniLM model is not bundled with Swarm. Call
+`SemanticEmbeddingAvailability.ensureModelAvailable()` to download it on
+demand (SHA-256 verified, compiled into `~/Library/Application Support/Swarm/Embeddings/`).
+Without it, Integrations `DefaultAgentMemory` uses deterministic
+pseudo-embeddings, logs a once-per-process warning naming that API, and
+`isSemanticMemoryAvailable` is `false`. Set
+`downloadsEmbeddingModelAutomatically` on the memory configuration to opt in
+to auto-download (default `off`). A failed auto-download logs a warning and
+starts the session with fallback embeddings; call `ensureModelAvailable()` to
+retry. Simulator uses CoreML CPU inference; it is not a special-case fallback.
+
+### Disabling the Macros trait
+
+The **`Macros`** SwiftPM trait is **on by default**. It pulls `swift-syntax` so
+`@Tool`, `@Parameter`, `#Prompt`, and `@Traceable` work. Specifying traits on
+the package dependency replaces defaults, so `traits: ["Integrations"]` still
+keeps macros (Integrations enables Macros). To drop `swift-syntax` entirely:
+
+```swift
+.package(
+    url: "https://github.com/christopherkarani/Swarm.git",
+    from: "0.6.6",
+    traits: []
+)
+```
+
+You lose `@Tool`, `@Parameter`, `#Prompt`, and `@Traceable`. Everything else
+stays: agents, workflows, memory, and ``FunctionTool``.
 
 ```swift
 import Swarm
 
-// 1. Define a tool — the @Tool macro generates the JSON schema
-@Tool("Looks up the current stock price")
+let echo = FunctionTool(
+    name: "echo",
+    description: "Echoes a message",
+    parameters: [
+        ToolParameter(name: "message", description: "Text to echo", type: .string)
+    ]
+) { args in
+    let message = try args.require("message", as: String.self)
+    return .string(message)
+}
+
+let agent = try Agent(
+    "Repeat the user's text.",
+    inferenceProvider: .foundationModels()
+) {
+    echo
+}
+```
+
+### MCP and OpenTelemetry traits
+
+The **`MCP`** and **`OpenTelemetry`** SwiftPM traits are **off by default**.
+Unchecking those products in Xcode does not drop their remotes — only the
+traits do. Swarm's built-in MCP *client* (`MCPClient`, `HTTPMCPServer`) stays
+in the `Swarm` product and does not need the MCP trait.
+
+```swift
+.package(
+    url: "https://github.com/christopherkarani/Swarm.git",
+    from: "0.6.6",
+    traits: ["MCP"]
+)
+
+.package(
+    url: "https://github.com/christopherkarani/Swarm.git",
+    from: "0.6.6",
+    traits: ["OpenTelemetry"]
+)
+```
+
+Specifying traits replaces defaults, so both of those keep macros (each trait
+enables Macros). Combine with Integrations as
+`traits: ["Integrations", "MCP", "OpenTelemetry"]`.
+
+### Xcode
+
+**File → Add Package Dependencies →** `https://github.com/christopherkarani/Swarm.git`
+
+Select only the `Swarm` product for a lean app. Enable package traits under
+the dependency's traits inspector if you need `MCP` or `OpenTelemetry`.
+
+## Your First Agent
+
+The primary way to create an agent is with the `Agent` struct initializer. The canonical init takes an unlabeled instructions string and a `@ToolBuilder` trailing closure for tools.
+
+### On-device (recommended on Apple platforms)
+
+```swift
+import Swarm
+
+@Tool("Looks up a canned stock price")
 struct PriceTool {
     @Parameter("Ticker symbol") var ticker: String
 
     func execute() async throws -> String { "182.50" }
 }
 
-// 2. Create an agent with tools
-let agent = try Agent("Answer finance questions using real data.",
+// No API key. Requires macOS/iOS 26+ with Apple Intelligence available.
+// Parameter order: configuration → memory → inferenceProvider → guardrails → tools
+let agent = try Agent(
+    "Answer finance questions using tools when needed.",
     configuration: .default.name("Analyst"),
-    inferenceProvider: .anthropic(key: "sk-..."),
     memory: .conversation(maxMessages: 50),
+    inferenceProvider: .foundationModels(),
+    inputGuardrails: [InputGuard.maxLength(5000), InputGuard.notEmpty()]
+) {
+    PriceTool()
+}
+
+let result = try await agent.run("What is AAPL trading at?")
+print(result.output)
+```
+
+If the system model might be missing (Simulator, Linux CI, older OS), prefer the safe factory:
+
+```swift
+guard let provider = FoundationModelsInferenceProvider.ifAvailable() else {
+    // Inject a custom InferenceProvider, or fail with a clear user message.
+    throw AgentError.inferenceProviderUnavailable(reason: "Foundation Models unavailable")
+}
+let agent = try Agent("You are helpful.", inferenceProvider: provider)
+```
+
+### OpenAI-compatible remote provider (Linux / no Apple Intelligence)
+
+Same agent loop, `URLSession` only. Prompt content is sent to `baseURL` —
+contrast with on-device Foundation Models.
+
+```swift
+let agent = try Agent(
+    "Answer finance questions using real data.",
+    configuration: .default.name("Analyst"),
+    memory: .conversation(maxMessages: 50),
+    inferenceProvider: .openAICompatible(.ollama(model: "llama3.2")),
+    inputGuardrails: [InputGuard.maxLength(5000), InputGuard.notEmpty()]
+) {
+    PriceTool()
+}
+```
+
+Factories: `.openAI(apiKey:model:)`, `.azureOpenAI(resource:deployment:apiKey:)`,
+`.openRouter(apiKey:model:)`, `.ollama(model:)`, `.lmStudio(model:)`. See
+[Remote Providers](remote-providers.md).
+
+### Custom `InferenceProvider`
+
+For non–Foundation Models / non–OpenAI-compatible backends, implement or inject
+any type that conforms to `InferenceProvider` and pass it explicitly (or via
+`await Swarm.configure(provider:)`):
+
+```swift
+let agent = try Agent(
+    "Answer finance questions using real data.",
+    configuration: .default.name("Analyst"),
+    memory: .conversation(maxMessages: 50),
+    inferenceProvider: myCustomProvider,
     inputGuardrails: [InputGuard.maxLength(5000), InputGuard.notEmpty()]
 ) {
     PriceTool()
     CalculatorTool()
 }
+```
 
-// 3. Run it
-let result = try await agent.run("What is AAPL trading at?")
-print(result.output) // "Apple (AAPL) is currently trading at $182.50."
+### Working example apps
+
+```bash
+cd Examples/OnDeviceChat && swift run OnDeviceChat --demo
+cd Examples/MultiAgentPipeline && swift run MultiAgentPipeline --demo
 ```
 
 ## Creating Tools
@@ -70,6 +252,8 @@ struct WebSearchTool {
     }
 }
 ```
+
+Supported parameter types are `String`, `Int`, `Double`/`Float`, `Bool`, arrays of those, and `Optional` thereof. Dictionaries and other types are compile errors — use `FunctionTool` for `.any` or object schemas.
 
 ### `FunctionTool` (one-off closures)
 
@@ -92,7 +276,7 @@ Use `FunctionTool` inside a `@ToolBuilder` closure:
 
 ```swift
 let agent = try Agent("You are a helpful text utility.",
-    inferenceProvider: .anthropic(key: "sk-...")
+    inferenceProvider: .foundationModels()
 ) {
     FunctionTool(
         name: "reverse",
@@ -121,18 +305,36 @@ let agent = try Agent("You are a helpful text utility.",
 
 ### Single-turn `run()`
 
-Returns an `AgentResult` with the agent's final output, tool call records, token usage, and duration:
+Returns an `AgentResult` with the agent's final output, tool call records, duration,
+and optional token usage. `tokenUsage` is populated only when the inference provider
+reports it on ``InferenceResponse/usage``. On OS 27, Apple Foundation Models fills
+that from `LanguageModelSession.Response.usage`. On OS 26 the field is absent, so
+usage stays `nil` — Swarm does not fabricate counts. After a handoff, the parent
+`AgentResult` still reports the combined cost;
+`MetricsCollector` attributes tokens per agent span so nested runs are not counted twice.
+
+`AgentResponse.asResult` is a lossy compatibility projection: it keeps output,
+metadata, usage, and iteration count, but drops `responseId`, `agentName`, and
+the response timestamp, mints new tool-call IDs, and sets `duration` to the sum
+of recorded tool-call durations (`.zero` when no tools ran). Prefer `Agent.run`
+when you need the canonical execution result.
 
 ```swift
 let result = try await agent.run("What is 2 + 2?")
 print(result.output)       // "4"
 print(result.duration)     // Duration
-print(result.tokenUsage)   // TokenUsage(inputTokens:, outputTokens:)
+print(result.tokenUsage)   // TokenUsage(...) when the provider reports usage; else nil
 ```
 
 ### Streaming with `stream()`
 
-Stream `AgentEvent` values in real time -- ideal for live UI:
+`Agent.stream` runs the same loop as `run` and forwards `AgentEvent` values
+through an observer — lifecycle, tool, and output events as they occur.
+
+`.output(.token)` is an incremental text chunk when the provider streams
+(Foundation Models does). If the provider only has a completion API, that
+event is the full response in one chunk. This is not a separate token-level
+decoder sitting in front of `run`.
 
 ```swift
 for try await event in agent.stream("Tell me about Swift concurrency.") {
@@ -164,6 +366,24 @@ for message in await conversation.messages {
     print("\(message.role): \(message.text)")
 }
 ```
+
+### Voice (`VoiceSession`)
+
+`VoiceSession` wraps an existing agent for one spoken (or injected) turn.
+VoiceSession sends text to `agent.stream`; audio attachments are opt-in and
+capability-gated. Output sentences go through a `TextToSpeech` adapter.
+
+```swift
+let voice = VoiceSession(
+    agent: agent,
+    speechToText: mySpeechToText,
+    textToSpeech: myTextToSpeech
+)
+let turn = try await voice.respond(to: "What's 2 plus 2?")
+```
+
+See [Voice](voice.md) for listen/respond, sentence buffering, and live-mic
+plist requirements.
 
 ## Multi-Agent Workflows
 
@@ -203,11 +423,54 @@ let result = try await Workflow()
     .run("What is 15% of $240?")
 ```
 
-### Durable: checkpoint and resume
+### Shared notes (`Job`)
 
-For checkpoint/resume and other power features, use the `.durable` namespace:
+`Workflow` passes the last answer along. Use `Job` when helpers share notes
+and each one needs a different brief — including when you only know N after
+an earlier step.
+
+| Need | Use |
+| --- | --- |
+| Last agent's answer becomes the next agent's input | `Workflow` |
+| Shared notes, different briefs, N decided after a step | `Job` |
 
 ```swift
+let sections = try await Job().run("Write an essay about rivers") { session in
+    await session.ingest(JobRecord(kind: "note", text: "alpha: source"))
+    await session.ingest(JobRecord(kind: "note", text: "beta: mouth"))
+    let alpha = await session.window(query: "alpha", tokenLimit: 400)
+    let beta = await session.window(query: "beta", tokenLimit: 400)
+    return try await session.fanOut([
+        JobChild(name: "alpha", agent: writerA, brief: alpha),
+        JobChild(name: "beta", agent: writerB, brief: beta),
+    ])
+}
+```
+
+`JobSession.window` searches those notes (case-insensitive substring of kind
+or text). A custom `JobStore` only has to hold records (`ingest`,
+`records()` in ingest order, `records(kind:)` as an exact kind match).
+
+### Durable: checkpoint and resume
+
+Durable Hive checkpoint/resume requires the **`Integrations`** SwiftPM trait
+(`--traits Integrations` or `.package(..., traits: ["Integrations"])`).
+
+Without Integrations:
+
+- `.durable.checkpoint` / `.checkpointing` and `WorkflowCheckpointing.*` still
+  type-check (configuration-only APIs) and emit a once-per-process warning
+  naming the missing trait and the rebuild remedy
+  (`--traits Integrations` / `traits: ["Integrations"]`).
+- `execute` / `.durable.execute` **throws** `WorkflowError.durableRuntimeUnavailable`
+  when checkpointing is configured or `resumeFrom` is non-nil, with the same
+  remedy in the error message.
+- Bare workflow `run` / `execute` **without** durable configuration still runs as
+  a non-durable workflow.
+
+```swift
+// Requires Integrations trait for checkpoint/resume at execute time.
+// Lean builds warn at `.checkpoint` / `.checkpointing` and throw on execute.
 let result = try await Workflow()
     .step(fetchAgent)
     .step(analyzeAgent)
@@ -219,29 +482,119 @@ let result = try await Workflow()
     .execute("Summarize the WWDC session", resumeFrom: nil)
 ```
 
+See [Durable Execution](./durable-execution.md) for step-granularity semantics
+(a mid-step crash re-runs the whole step), signature stability rules, and
+file-store pruning (keep-latest-16 per run by default).
+
 ## Choosing a Provider
 
-Swarm supports multiple inference providers. Pass via the `inferenceProvider:` init parameter:
+Built-in inference is **Apple Foundation Models only**. Pass a provider via the
+`inferenceProvider:` init parameter, or implement ``InferenceProvider`` for a
+custom backend:
 
 ```swift
-// On-device (private, no network)
+// On-device Apple Foundation Models (private, native tool calling)
 let agent = try Agent("You are helpful.", inferenceProvider: .foundationModels())
 
-// Anthropic
-let agent = try Agent("You are helpful.", inferenceProvider: .anthropic(key: "sk-..."))
+// OS 27: pass any Apple LanguageModel, including PrivateCloudComputeLanguageModel.
+// ifAvailable(model:) returns nil when that model is off — no on-device fallback.
+let pccAgent = try Agent(
+    "You are helpful.",
+    inferenceProvider: .foundationModels(model: PrivateCloudComputeLanguageModel())
+)
 
-// OpenAI
-let agent = try Agent("You are helpful.", inferenceProvider: .openAI(key: "sk-..."))
+// Swarm DynamicProfile (not Apple's LanguageModelSession.DynamicProfile):
+// switch instructions/tools/history per capture turn.
+enum Phase { case brainstorm, review }
+let mode = ProfileMode(Phase.brainstorm)
+let profile = ModeSwitchingDynamicProfile(mode: mode) { phase in
+    switch phase {
+    case .brainstorm:
+        Profile(
+            id: "brainstorm",
+            instructions: "Ideate freely.",
+            generation: .init(temperature: 1.0)
+        )
+    case .review:
+        Profile(
+            id: "review",
+            instructions: "Be precise and concise.",
+            history: .dropToolTranscriptAndKeepLast(count: 12),
+            generation: .init(temperature: 0.2)
+        )
+    }
+}
+let profiled = try Agent(
+    "You are helpful.",
+    inferenceProvider: .foundationModels(profile: profile)
+)
+// Later, from a handoff tool or UI: mode.current = .review
 
-// Ollama (local)
-let agent = try Agent("You are helpful.", inferenceProvider: .ollama(model: "llama3.2"))
+// Custom backend
+let agent = try Agent("You are helpful.", inferenceProvider: myCustomProvider)
 ```
 
 Or using the `.environment()` modifier on any `AgentRuntime`:
 
 ```swift
-agent.environment(\.inferenceProvider, .anthropic(key: "sk-..."))
+agent.environment(\.inferenceProvider, myCustomProvider)
 ```
+
+### Capture vs provider-owned tool loop (experimental)
+
+By default Swarm **captures** Foundation Models tool calls (including a parallel
+group in one turn) and executes them in the agent loop (guardrails, checkpoints,
+per-iteration memory). Construct ``InferenceProvider/foundationModelsOwningToolLoop()``
+for a provider-owned tool loop — Agent reads Capabilities and does not type-cast
+the provider. On OS 27, pass
+`FoundationModelsProviderConfiguration(reasoningLevel: .deep)` to that factory
+for Apple `ContextOptions`. ``ToolChoice/specific(toolName:)`` is still a
+prompt sentence — Foundation Models has no `.specific` tool-calling mode.
+Owned-loop applies Swarm ``ProfileHistoryPolicy`` (for example
+``.dropToolTranscript``) before seeding Apple `Transcript` when history is
+text-only. Capture rehydrates Apple `Transcript` from representable
+user/assistant/tool history and flattens only when it cannot. See
+[Foundation Models](foundation-models.md) for the trade-off table.
+
+```swift
+let agent = try Agent(
+    "Be helpful.",
+    inferenceProvider: .foundationModelsOwningToolLoop()
+) {
+    WeatherTool()
+}
+```
+
+### Resilience (opt-in)
+
+By default agents do not retry inference. Attach policies through configuration:
+
+```swift
+let config = AgentConfiguration.default
+    .resilience(ResilienceConfiguration(
+        retryPolicy: .standard,
+        circuitBreaker: CircuitBreakerSettings(failureThreshold: 5)
+    ))
+```
+
+Retries wrap **provider calls only** (not tools), share the run's remaining timeout, and skip permanent failures such as guardrail rejection. See ``InferenceRetryability``.
+
+`maxAttempts` counts total attempts including the initial attempt and must be at least 1 (`noRetry` is 1, `standard` is 3 total). The same budget applies to `AsyncThrowingStream.retry` and `HiveRetryPolicy`; values below 1 throw `ResilienceError.invalidMaxAttempts`.
+
+### Structured output
+
+`runStructured` uses Foundation Models guided generation when the JSON Schema
+maps onto `GenerationSchema` (result `source` is `.providerNative`). `.jsonObject`
+and unmappable schemas stay prompt-instruction + parse (`.promptFallback`).
+
+### Provider resolution order
+
+1. When `inferencePolicy.privacyRequired` is true: Foundation Models first, then only providers that report `privateInference` (explicit → environment → `Swarm.defaultProvider`); otherwise `AgentError.inferenceProviderUnavailable`
+2. Explicit provider on the agent  
+3. Task-local / environment override  
+4. `Swarm.defaultProvider` from `await Swarm.configure(provider:)`  
+5. Foundation Models when the system model is available  
+6. Else `AgentError.inferenceProviderUnavailable`
 
 ## Requirements
 
@@ -253,12 +606,16 @@ agent.environment(\.inferenceProvider, .anthropic(key: "sk-..."))
 | Linux | Ubuntu 22.04+ with Swift 6.2 |
 
 ::: tip
-Foundation Models require iOS 26 / macOS 26. Cloud providers (Anthropic, OpenAI, Ollama) work on any Swift 6.2 platform including Linux.
+The default Swarm graph is CI-tested on Ubuntu with Swift 6.2. Apple-only features such as Foundation Models, SwiftData, OSLog, and some built-in tool behavior are unavailable or different on Linux; use ``OpenAICompatibleProvider`` or inject a mock.
 :::
 
 ## Next Steps
 
 - **[Agents](../reference/front-facing-api.md#3-agent-struct-primary-init)** -- Agent types, configuration, tool calling
-- **[Tools](../reference/front-facing-api.md#5-tool-and-functiontool)** -- `@Tool` macro, `FunctionTool`, tool chains
-- **[Workflow](../reference/front-facing-api.md#7-workflow)** -- Sequential, parallel, and routed execution
-- **[Memory](../reference/front-facing-api.md#10-memoryoption)** -- Conversation, vector, summary, persistent
+- **[Foundation Models](foundation-models.md)** -- Capture vs provider-owned tool loop
+- **[Voice](voice.md)** -- Turn-based `VoiceSession` around an existing Agent
+- **[Remote Providers](remote-providers.md)** -- OpenAI-compatible HTTP (OpenAI, Azure, OpenRouter, Ollama, LM Studio)
+- **[Tools](../reference/front-facing-api.md#5-tool-and-functiontool)** -- `@Tool` macro, `FunctionTool`, `ToolCollection`, and `@ToolBuilder`
+- **[Workflow](../reference/front-facing-api.md#7-workflow)** -- Sequential, parallel, and routed last-answer chain
+- **[Job](../reference/front-facing-api.md#7b-job)** -- Shared notes, per-helper briefs, late N fan-out
+- **[Memory](../reference/front-facing-api.md#9-memory-factories)** -- Conversation, vector, summary, persistent

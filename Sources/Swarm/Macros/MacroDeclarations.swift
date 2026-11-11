@@ -4,6 +4,8 @@
 // Public macro declarations for Swarm.
 // These macros significantly reduce boilerplate when creating tools and agents.
 
+#if SWARM_MACROS
+
 // MARK: - @Tool Macro
 
 /// A macro that generates Tool protocol conformance for a struct.
@@ -132,10 +134,14 @@ public macro Tool(_ description: String) = #externalMacro(module: "SwarmMacros",
 /// |------------|---------------------|
 /// | `String` | `.string` |
 /// | `Int` | `.int` |
-/// | `Double` | `.double` |
+/// | `Double` / `Float` | `.double` |
 /// | `Bool` | `.bool` |
-/// | `[T]` | `.array(elementType: ...)` |
-/// | `Optional<T>` | Same as T, marked optional |
+/// | `[T]` / `Array<T>` | `.array(elementType: ...)` |
+/// | `T?` / `Optional<T>` | Same as T, marked optional |
+///
+/// Unsupported types (including `[String: T]` dictionaries) are **compile errors**.
+/// Use `@Parameter(oneOf:)` for string enums. For objects, dictionaries, or `.any`,
+/// write a ``FunctionTool`` instead.
 ///
 /// ## Parameters
 ///
@@ -181,7 +187,7 @@ public macro Parameter(
     member,
     names: named(tools), named(instructions), named(configuration), named(memory), named(inferenceProvider),
     named(tracer), named(_memory), named(_defaultMemory), named(resolvedMemory), named(makeDefaultMemory),
-    named(_inferenceProvider), named(_tracer), named(isCancelled), named(init), named(run), named(stream),
+    named(_inferenceProvider), named(_tracer), named(isCancelled), named(lastTokenUsage), named(init), named(run), named(stream),
     named(cancel), named(Builder)
 )
 @attached(extension, conformances: AgentRuntime)
@@ -235,6 +241,7 @@ public macro AgentActor(
 /// - `var memory: (any Memory)?` - Optional memory
 /// - `var inferenceProvider: (any InferenceProvider)?` - Optional provider
 /// - `var tracer: (any Tracer)?` - Optional tracer
+/// - `var lastTokenUsage: TokenUsage?` - Set from `process` to forward usage
 /// - `init(...)` - Standard initializer with all parameters
 /// - `run(_ input:session:observer:)` - Calls your `process()` method
 /// - `stream(_ input:session:observer:)` - Wraps run() in tracked async stream
@@ -249,7 +256,7 @@ public macro AgentActor(
     member,
     names: named(tools), named(instructions), named(configuration), named(memory), named(inferenceProvider),
     named(tracer), named(_memory), named(_defaultMemory), named(resolvedMemory), named(makeDefaultMemory),
-    named(_inferenceProvider), named(_tracer), named(isCancelled), named(init), named(run), named(stream),
+    named(_inferenceProvider), named(_tracer), named(isCancelled), named(lastTokenUsage), named(init), named(run), named(stream),
     named(cancel), named(Builder)
 )
 @attached(extension, conformances: AgentRuntime)
@@ -317,6 +324,8 @@ public macro Prompt(_ content: String) -> PromptString = #externalMacro(
     type: "PromptMacro"
 )
 
+#endif
+
 // MARK: - PromptString
 
 /// A validated prompt string created by the #Prompt macro.
@@ -353,6 +362,8 @@ public struct PromptString: Sendable, ExpressibleByStringLiteral, ExpressibleByS
     }
 }
 
+#if SWARM_MACROS
+
 // MARK: - #Tool Macro (Inline Tool)
 
 /// Creates an inline tool from a closure with labeled parameters.
@@ -383,7 +394,11 @@ public struct PromptString: Sendable, ExpressibleByStringLiteral, ExpressibleByS
 /// | `Int` | `.int` |
 /// | `Double` / `Float` | `.double` |
 /// | `Bool` | `.bool` |
-/// | `T?` | Same as T, `isRequired: false` |
+/// | `[T]` / `Array<T>` | `.array(elementType: ...)` |
+/// | `T?` / `Optional<T>` | Same as T, `isRequired: false` |
+///
+/// Unsupported types (including dictionaries) are compile errors. For advanced
+/// schemas, write a ``FunctionTool``.
 ///
 /// ## Relationship to @Tool
 ///
@@ -466,6 +481,7 @@ public macro Tool(
 @attached(member, names: arbitrary)
 public macro Builder() = #externalMacro(module: "SwarmMacros", type: "BuilderMacro")
 
+#endif
 
 // MARK: - PromptString String Interpolation
 

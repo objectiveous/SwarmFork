@@ -27,8 +27,8 @@ import Foundation
 /// let client = MCPClient()
 ///
 /// // Add servers
-/// let filesystemServer = HTTPMCPServer(name: "filesystem", baseURL: filesystemURL)
-/// let databaseServer = HTTPMCPServer(name: "database", baseURL: databaseURL)
+/// let filesystemServer = try HTTPMCPServer(url: filesystemURL, name: "filesystem")
+/// let databaseServer = try HTTPMCPServer(url: databaseURL, name: "database")
 ///
 /// try await client.addServer(filesystemServer)
 /// try await client.addServer(databaseServer)
@@ -88,7 +88,7 @@ public actor MCPClient {
     ///
     /// ## Example
     /// ```swift
-    /// let server = HTTPMCPServer(name: "my-server", baseURL: serverURL)
+    /// let server = try HTTPMCPServer(url: serverURL, name: "my-server")
     /// try await client.addServer(server)
     /// print("Connected to \(server.name)")
     /// ```
@@ -96,7 +96,7 @@ public actor MCPClient {
     /// ## Note
     /// Adding a server with the same name as an existing server will replace
     /// the existing server after closing it.
-    public func addServer(_ server: any MCPServer) async throws {
+    public func addServer(_ server: any MCPServerConnection) async throws {
         // Close existing server with same name if present
         if let existing = servers[server.name] {
             try? await existing.close()
@@ -155,7 +155,9 @@ public actor MCPClient {
     /// are cached for performance; subsequent calls return the cached tools
     /// until the cache is invalidated (by adding or removing servers).
     ///
-    /// - Returns: An array of all available tools from all connected servers.
+    /// - Returns: An array of ``AnyJSONTool`` values from all connected servers.
+    ///   `AnyJSONTool` is Swarm's public type-erased interoperability seam; use
+    ///   ``Tool`` or `@Tool` for type-safe application-authored tools.
     /// - Throws: `MCPError` if tool discovery fails for any server.
     ///
     /// ## Example
@@ -279,7 +281,9 @@ public actor MCPClient {
     /// discovery of tools from all connected servers. Use this when you
     /// need to ensure the tool list is up-to-date.
     ///
-    /// - Returns: An array of all available tools from all connected servers.
+    /// - Returns: An array of ``AnyJSONTool`` values from all connected servers.
+    ///   `AnyJSONTool` is Swarm's public type-erased interoperability seam; use
+    ///   ``Tool`` or `@Tool` for type-safe application-authored tools.
     /// - Throws: `MCPError` if tool discovery fails for any server.
     ///
     /// ## Example
@@ -612,7 +616,7 @@ public actor MCPClient {
     // MARK: Private
 
     /// Registry of connected MCP servers, keyed by server name.
-    private var servers: [String: any MCPServer] = [:]
+    private var servers: [String: any MCPServerConnection] = [:]
 
     /// Cache of tools from all connected servers, keyed by client-visible tool name.
     private var toolCache: [String: any AnyJSONTool] = [:]
@@ -699,7 +703,7 @@ public actor MCPClient {
     private struct DiscoveredTool {
         let serverName: String
         let schema: ToolSchema
-        let server: any MCPServer
+        let server: any MCPServerConnection
     }
 
     private func reserveUniqueToolName(

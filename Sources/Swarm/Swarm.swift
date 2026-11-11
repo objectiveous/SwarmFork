@@ -23,7 +23,7 @@
 /// // Create an agent with instructions, a provider, and a trailing
 /// // @ToolBuilder closure listing the agent's tools.
 /// let agent = try Agent("You are a helpful assistant that can perform calculations.",
-///     inferenceProvider: .anthropic(key: "sk-...")) {
+///     inferenceProvider: .foundationModels()) {
 ///     CalculatorTool()
 ///     DateTimeTool()
 /// }
@@ -41,7 +41,7 @@
 ///
 public enum Swarm {
     /// The current version of the Swarm framework.
-    public static let version = "0.5.1"
+    public static let version = "0.6.6"
 
     /// The minimum macOS platform version required by Swarm.
     public static let minimumMacOSVersion = "26.0"

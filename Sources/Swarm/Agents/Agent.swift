@@ -22,9 +22,8 @@ import Foundation
 /// 2. An explicit provider passed to `Agent(...)` (including `Agent(_:)`)
 /// 3. A provider set via `.environment(\.inferenceProvider, ...)`
 /// 4. `Swarm.defaultProvider` (set via `Swarm.configure(provider:)`)
-/// 5. `Swarm.cloudProvider` (set via `Swarm.configure(cloudProvider:)`, when tool calling is required)
-/// 6. Apple Foundation Models (on-device), if available, including prompt-based tool emulation
-/// 7. Otherwise, throw `AgentError.inferenceProviderUnavailable`
+/// 5. Apple Foundation Models (on-device), if available
+/// 6. Otherwise, throw `AgentError.inferenceProviderUnavailable`
 ///
 /// The agent follows a loop-based execution pattern:
 /// 1. Build prompt with system instructions + conversation history
@@ -54,7 +53,7 @@ public struct Agent: AgentRuntime, Sendable {
     /// The agent uses these tool schemas to inform the LLM about available capabilities.
     ///
     /// To add tools, use the ``init(_:configuration:memory:inferenceProvider:tracer:inputGuardrails:outputGuardrails:guardrailRunnerConfiguration:handoffs:tools:)`` initializer
-    /// with a `@ToolBuilder` closure, or the ``Builder`` API.
+    /// with a `@ToolBuilder` closure, or ``withTools(_:)``.
     ///
     /// ## Tool Execution
     /// When the LLM requests a tool call, the agent executes the corresponding tool
@@ -75,7 +74,7 @@ public struct Agent: AgentRuntime, Sendable {
     /// "You are a weather assistant. Be concise and friendly."
     /// ```
     ///
-    /// To set instructions, use any of the ``Agent`` initializers or the ``Builder/instructions(_:)`` method.
+    /// To set instructions, use one of the ``Agent`` initializers.
     public private(set) var instructions: String
 
     /// The runtime configuration settings for this agent.
@@ -111,13 +110,14 @@ public struct Agent: AgentRuntime, Sendable {
     /// - **Memory**: Provides additional context (RAG, summaries) - not for conversation storage
     /// - **Session**: Stores the actual conversation history and is the source of truth for transcripts
     ///
-    /// If no explicit memory is set, Swarm still uses a composite default memory
-    /// internally: ContextCore for working context and Wax for durable recall.
+    /// If no explicit memory is set, Swarm uses ``makeDefaultMemory()``
+    /// internally: ContextCore + Wax ``DefaultAgentMemory`` when the Integrations
+    /// trait is enabled, otherwise ``SlidingWindowMemory``.
     /// This property only reflects an explicit override.
     ///
     /// ## Setting Memory
     /// Use ``init(_:configuration:memory:inferenceProvider:tracer:inputGuardrails:outputGuardrails:guardrailRunnerConfiguration:handoffs:tools:)``
-    /// or the ``Builder/memory(_:)`` method.
+    /// or pass memory to an ``Agent`` initializer.
     ///
     /// See ``Memory`` for available memory implementations.
     public private(set) var memory: (any Memory)?
@@ -132,13 +132,13 @@ public struct Agent: AgentRuntime, Sendable {
     /// 2. Explicit provider passed to ``Agent`` initialization
     /// 3. Provider set via `.environment(\.inferenceProvider, ...)`
     /// 4. ``Swarm/defaultProvider`` (configured via `Swarm.configure(provider:)`)
-    /// 5. ``Swarm/cloudProvider`` (configured via `Swarm.configure(cloudProvider:)`)
-    /// 6. Apple Foundation Models (on-device), if available
-    /// 7. Throws ``AgentError/inferenceProviderUnavailable``
+    /// 5. Apple Foundation Models (on-device), if available
+    /// 6. Throws ``AgentError/inferenceProviderUnavailable``
     ///
     /// ## Usage
-    /// Set a specific provider when you want this agent to use a different LLM than
-    /// the globally configured one.
+    /// Set a specific provider when you want this agent to use a different backend than
+    /// the globally configured one. Built-in inference is Apple Foundation Models;
+    /// inject any ``InferenceProvider`` for custom backends.
     public private(set) var inferenceProvider: (any InferenceProvider)?
 
     /// The input validation guardrails for this agent.
@@ -151,7 +151,7 @@ public struct Agent: AgentRuntime, Sendable {
     /// ``stream(_:session:observer:)`` before any LLM calls are made.
     ///
     /// ## Adding Guardrails
-    /// Use the ``Builder/inputGuardrails(_:)`` or ``Builder/addInputGuardrail(_:)`` methods.
+    /// Use an ``Agent`` initializer to configure input guardrails.
     ///
     /// See ``InputGuardrail`` for creating custom guardrails.
     public private(set) var inputGuardrails: [any InputGuardrail]
@@ -166,7 +166,7 @@ public struct Agent: AgentRuntime, Sendable {
     /// returned in ``run(_:session:observer:)``.
     ///
     /// ## Adding Guardrails
-    /// Use the ``Builder/outputGuardrails(_:)`` or ``Builder/addOutputGuardrail(_:)`` methods.
+    /// Use an ``Agent`` initializer to configure output guardrails.
     ///
     /// See ``OutputGuardrail`` for creating custom guardrails.
     public private(set) var outputGuardrails: [any OutputGuardrail]
@@ -182,10 +182,22 @@ public struct Agent: AgentRuntime, Sendable {
     ///
     /// ## Setting a Tracer
     /// Use ``init(_:configuration:memory:inferenceProvider:tracer:inputGuardrails:outputGuardrails:guardrailRunnerConfiguration:handoffs:tools:)``
-    /// or the ``Builder/tracer(_:)`` method.
+    /// or pass a tracer to an ``Agent`` initializer.
     ///
     /// See ``Tracer`` for the protocol definition and available implementations.
     public private(set) var tracer: (any Tracer)?
+
+    /// The auto-attached ``MetricsCollector``, when
+    /// ``AgentConfiguration/autoAttachMetricsCollector`` is `true`.
+    ///
+    /// `nil` when the configuration flag is off. When present, the collector
+    /// is composed into the tracer chain so execution metrics accumulate
+    /// without passing a tracer manually. Call ``MetricsCollector/snapshot()``
+    /// to read counters, durations, and token totals.
+    ///
+    /// - SeeAlso: ``AgentConfiguration/autoAttachMetricsCollector(_:)``,
+    ///   ``MetricsCollector``
+    public private(set) var metricsCollector: MetricsCollector?
 
     /// The configuration for the guardrail runner.
     ///
@@ -213,10 +225,13 @@ public struct Agent: AgentRuntime, Sendable {
     ///
     /// ## Adding Handoffs
     /// ```swift
-    /// let agent = try Agent("Route requests to the right specialist.") {
-    ///     handoff(to: billingAgent)
-    ///     handoff(to: supportAgent)
-    /// }
+    /// let agent = try Agent(
+    ///     "Route requests to the right specialist.",
+    ///     handoffs: [
+    ///         billingAgent.asHandoff { $0.name("handoff_to_billing") },
+    ///         supportAgent.asHandoff { $0.name("handoff_to_support") },
+    ///     ]
+    /// )
     /// ```
     ///
     /// See ``AnyHandoffConfiguration`` and ``HandoffOptions`` for more details.
@@ -231,7 +246,7 @@ public struct Agent: AgentRuntime, Sendable {
     ///   - tools: Tools available to the agent. Default: []
     ///   - instructions: System instructions defining agent behavior. Default: ""
     ///   - configuration: Agent configuration settings. Default: .default
-    ///   - memory: Optional explicit memory override. Default: composite ContextCore + Wax memory
+    ///   - memory: Optional explicit memory override. Default: ContextCore+Wax `DefaultAgentMemory` when Integrations is enabled; otherwise `SlidingWindowMemory`
     ///   - inferenceProvider: Optional custom inference provider. Default: nil
     ///   - tracer: Optional tracer for observability. Default: nil
     ///   - inputGuardrails: Input validation guardrails. Default: []
@@ -239,6 +254,10 @@ public struct Agent: AgentRuntime, Sendable {
     ///   - guardrailRunnerConfiguration: Configuration for guardrail runner. Default: .default
     ///   - handoffs: Handoff configurations for multi-agent orchestration. Default: []
     /// - Throws: `ToolRegistryError.duplicateToolName` if duplicate tool names are provided.
+    /// - Throws: ``AgentError/duplicateHandoffToolName(name:)`` if two handoffs share an
+    ///   effective tool name.
+    /// - Throws: ``AgentError/handoffToolNameCollidesWithTool(name:)`` if a handoff's
+    ///   effective name equals a registered tool name, including disabled tools.
     @_disfavoredOverload
     public init(
         tools: [any AnyJSONTool] = [],
@@ -252,25 +271,79 @@ public struct Agent: AgentRuntime, Sendable {
         guardrailRunnerConfiguration: GuardrailRunnerConfiguration = .default,
         handoffs: [AnyHandoffConfiguration] = []
     ) throws {
+        try self.init(
+            tools: tools,
+            instructions: instructions,
+            configuration: configuration,
+            memory: memory,
+            inferenceProvider: inferenceProvider,
+            tracer: tracer,
+            inputGuardrails: inputGuardrails,
+            outputGuardrails: outputGuardrails,
+            guardrailRunnerConfiguration: guardrailRunnerConfiguration,
+            handoffs: handoffs,
+            runEnvironment: .live
+        )
+    }
+
+    /// Designated initializer with explicit per-run dependencies.
+    ///
+    /// ``runEnvironment`` defaults to ``AgentRunEnvironment/live`` so agents
+    /// built through public initializers share dedup and session-serialization
+    /// state exactly as they did when these dependencies were process globals.
+    ///
+    /// - Throws: ``AgentError/duplicateHandoffToolName(name:)`` if two handoffs
+    ///   share an effective tool name.
+    /// - Throws: ``AgentError/handoffToolNameCollidesWithTool(name:)`` if a
+    ///   handoff's effective name equals a registered tool name.
+    /// - Throws: `ToolRegistryError.duplicateToolName` if duplicate tool names
+    ///   are provided.
+    init(
+        tools: [any AnyJSONTool] = [],
+        instructions: String = "",
+        configuration: AgentConfiguration = .default,
+        memory: (any Memory)? = nil,
+        inferenceProvider: (any InferenceProvider)? = nil,
+        tracer: (any Tracer)? = nil,
+        inputGuardrails: [any InputGuardrail] = [],
+        outputGuardrails: [any OutputGuardrail] = [],
+        guardrailRunnerConfiguration: GuardrailRunnerConfiguration = .default,
+        handoffs: [AnyHandoffConfiguration] = [],
+        runEnvironment: AgentRunEnvironment = .live
+    ) throws {
         self.tools = tools
         self.instructions = instructions
         self.configuration = configuration
         self.memory = memory
-        self.defaultMemory = try memory == nil ? Self.makeDefaultMemory() : nil
+        self.defaultMemory = try memory == nil
+            ? Self.makeDefaultMemory(waxStoreURL: runEnvironment.defaultMemoryStoreURL)
+            : nil
         self.inferenceProvider = inferenceProvider
         self.tracer = tracer
+        self.metricsCollector = configuration.autoAttachMetricsCollector
+            ? (tracer as? MetricsCollector ?? MetricsCollector())
+            : nil
         self.inputGuardrails = inputGuardrails
         self.outputGuardrails = outputGuardrails
         self.guardrailRunnerConfiguration = guardrailRunnerConfiguration
+        try HandoffIdentity.validate(
+            handoffs: handoffs,
+            toolNames: Set(tools.map(\.name))
+        )
         _handoffs = handoffs
         toolRegistry = try ToolRegistry(tools: tools)
+        inferenceCircuitBreaker = configuration.resilience.makeCircuitBreaker(
+            agentName: configuration.name
+        )
+        inferenceRateLimiter = configuration.resilience.makeRateLimiter()
+        self.runEnvironment = runEnvironment
     }
 
     /// Convenience initializer that takes an unlabeled inference provider.
     ///
     /// This enables an opinionated, easy setup:
     /// ```swift
-    /// let agent = Agent(.anthropic(key: "..."))
+    /// let agent = try Agent(.foundationModels())
     /// ```
     public init(
         _ inferenceProvider: any InferenceProvider,
@@ -303,7 +376,7 @@ public struct Agent: AgentRuntime, Sendable {
     ///   - tools: Typed tools available to the agent. Default: []
     ///   - instructions: System instructions defining agent behavior. Default: ""
     ///   - configuration: Agent configuration settings. Default: .default
-    ///   - memory: Optional explicit memory override. Default: composite ContextCore + Wax memory
+    ///   - memory: Optional explicit memory override. Default: ContextCore+Wax `DefaultAgentMemory` when Integrations is enabled; otherwise `SlidingWindowMemory`
     ///   - inferenceProvider: Optional custom inference provider. Default: nil
     ///   - tracer: Optional tracer for observability. Default: nil
     ///   - inputGuardrails: Input validation guardrails. Default: []
@@ -311,6 +384,10 @@ public struct Agent: AgentRuntime, Sendable {
     ///   - guardrailRunnerConfiguration: Configuration for guardrail runner. Default: .default
     ///   - handoffs: Handoff configurations for multi-agent orchestration. Default: []
     /// - Throws: `ToolRegistryError.duplicateToolName` if duplicate tool names are provided.
+    /// - Throws: ``AgentError/duplicateHandoffToolName(name:)`` if two handoffs share an
+    ///   effective tool name.
+    /// - Throws: ``AgentError/handoffToolNameCollidesWithTool(name:)`` if a handoff's
+    ///   effective name equals a registered tool name, including disabled tools.
     public init(
         tools: [some Tool] = [],
         instructions: String = "",
@@ -346,9 +423,12 @@ public struct Agent: AgentRuntime, Sendable {
     ///
     /// Example:
     /// ```swift
-    /// let triageAgent = Agent(
-    ///     instructions: "Route requests to the right specialist.",
-    ///     handoffAgents: [billingAgent, supportAgent, salesAgent]
+    /// let triageAgent = try Agent(
+    ///     "Route requests to the right specialist.",
+    ///     handoffs: [
+    ///         billingAgent.asHandoff { $0.name("handoff_to_billing") },
+    ///         supportAgent.asHandoff { $0.name("handoff_to_support") },
+    ///     ]
     /// )
     /// ```
     ///
@@ -356,7 +436,7 @@ public struct Agent: AgentRuntime, Sendable {
     ///   - tools: Tools available to the agent. Default: []
     ///   - instructions: System instructions defining agent behavior. Default: ""
     ///   - configuration: Agent configuration settings. Default: .default
-    ///   - memory: Optional explicit memory override. Default: composite ContextCore + Wax memory
+    ///   - memory: Optional explicit memory override. Default: ContextCore+Wax `DefaultAgentMemory` when Integrations is enabled; otherwise `SlidingWindowMemory`
     ///   - inferenceProvider: Optional custom inference provider. Default: nil
     ///   - tracer: Optional tracer for observability. Default: nil
     ///   - inputGuardrails: Input validation guardrails. Default: []
@@ -364,6 +444,10 @@ public struct Agent: AgentRuntime, Sendable {
     ///   - guardrailRunnerConfiguration: Configuration for guardrail runner. Default: .default
     ///   - handoffAgents: Agents to hand off to, automatically wrapped as handoff configurations.
     /// - Throws: `ToolRegistryError.duplicateToolName` if duplicate tool names are provided.
+    /// - Throws: ``AgentError/duplicateHandoffToolName(name:)`` if two agents share an
+    ///   effective handoff tool name (for example two ``Agent`` values with no override).
+    /// - Throws: ``AgentError/handoffToolNameCollidesWithTool(name:)`` if a handoff's
+    ///   effective name equals a registered tool name, including disabled tools.
     @_disfavoredOverload
     public init(
         tools: [any AnyJSONTool] = [],
@@ -413,7 +497,7 @@ public struct Agent: AgentRuntime, Sendable {
     /// - Parameters:
     ///   - instructions: System instructions defining agent behavior.
     ///   - configuration: Agent configuration settings. Default: `.default`
-    ///   - memory: Optional explicit memory override. Default: composite ContextCore + Wax memory
+    ///   - memory: Optional explicit memory override. Default: ContextCore+Wax `DefaultAgentMemory` when Integrations is enabled; otherwise `SlidingWindowMemory`
     ///   - inferenceProvider: Optional custom inference provider. Default: `nil`
     ///   - tracer: Optional tracer for observability. Default: `nil`
     ///   - inputGuardrails: Input validation guardrails. Default: `[]`
@@ -422,6 +506,10 @@ public struct Agent: AgentRuntime, Sendable {
     ///   - handoffs: Handoff configurations for multi-agent orchestration. Default: `[]`
     ///   - tools: A `@ToolBuilder` closure producing the agent's tools. Default: empty.
     /// - Throws: `ToolRegistryError.duplicateToolName` if duplicate tool names are provided.
+    /// - Throws: ``AgentError/duplicateHandoffToolName(name:)`` if two handoffs share an
+    ///   effective tool name.
+    /// - Throws: ``AgentError/handoffToolNameCollidesWithTool(name:)`` if a handoff's
+    ///   effective name equals a registered tool name, including disabled tools.
     public init(
         _ instructions: String,
         configuration: AgentConfiguration = .default,
@@ -448,2304 +536,96 @@ public struct Agent: AgentRuntime, Sendable {
         )
     }
 
-    // MARK: - Agent Protocol Methods
-
-    /// Executes the agent with the given input and returns a result.
-    /// - Parameters:
-    ///   - input: The user's input/query.
-    ///   - session: Optional session for conversation history management.
-    ///   - observer: Optional run observer for observing agent execution events.
-    /// - Returns: The result of the agent's execution.
-    /// - Throws: `AgentError` if execution fails, or `GuardrailError` if guardrails trigger.
-    public func run(_ input: String, session: (any Session)? = nil, observer: (any AgentObserver)? = nil) async throws -> AgentResult {
-        let runID = UUID()
-        let task = Task { [self] in
-            try await runInternal(input, session: session, observer: observer, structuredOutputRequest: nil)
-        }
-        await cancellationState.begin(runID: runID, task: task)
-
-        do {
-            let result = try await withTaskCancellationHandler(
-                operation: {
-                    try await task.value.agentResult
-                },
-                onCancel: {
-                    task.cancel()
-                }
-            )
-            await cancellationState.finish(runID: runID)
-            return result
-        } catch {
-            task.cancel()
-            await cancellationState.finish(runID: runID)
-            throw normalizeCancellation(error)
-        }
-    }
-
-    /// Executes the agent and enforces a structured output contract for the final assistant response.
-    public func runStructured(
-        _ input: String,
-        request: StructuredOutputRequest,
-        session: (any Session)? = nil,
-        observer: (any AgentObserver)? = nil
-    ) async throws -> StructuredAgentResult {
-        let runID = UUID()
-        let task = Task { [self] in
-            try await runInternal(input, session: session, observer: observer, structuredOutputRequest: request)
-        }
-        await cancellationState.begin(runID: runID, task: task)
-
-        do {
-            let result = try await withTaskCancellationHandler(
-                operation: {
-                    try await task.value
-                },
-                onCancel: {
-                    task.cancel()
-                }
-            )
-            await cancellationState.finish(runID: runID)
-
-            guard let structuredOutput = result.structuredOutput else {
-                throw AgentError.generationFailed(reason: "Structured output request completed without a structured result")
-            }
-
-            return StructuredAgentResult(agentResult: result.agentResult, structuredOutput: structuredOutput)
-        } catch {
-            task.cancel()
-            await cancellationState.finish(runID: runID)
-            throw normalizeCancellation(error)
-        }
-    }
-
-    /// Cancels any ongoing execution.
-    ///
-    public func cancel() async {
-        await cancellationState.cancelCurrent()
-    }
-
-    /// Streams the agent's execution, yielding events as they occur.
-    /// - Parameters:
-    ///   - input: The user's input/query.
-    ///   - session: Optional session for conversation history management.
-    ///   - observer: Optional run observer for observing agent execution events.
-    /// - Returns: An async stream of agent events.
-    public func stream(_ input: String, session: (any Session)? = nil, observer: (any AgentObserver)? = nil) -> AsyncThrowingStream<AgentEvent, Error> {
-        let agent = self
-        return StreamHelper.makeTrackedStream(bufferingPolicy: .unbounded) { continuation in
-            // Create event bridge observer
-            let streamObserver = EventStreamObserver(continuation: continuation)
-
-            // Combine with user-provided observer
-            let combinedObserver: any AgentObserver = if let userObserver = observer {
-                CompositeObserver(observers: [userObserver, streamObserver])
-            } else {
-                streamObserver
-            }
-
-            do {
-                _ = try await agent.run(input, session: session, observer: combinedObserver)
-                continuation.finish()
-            } catch {
-                // Error is handled by EventStreamObserver.onError
-                continuation.finish(throwing: error)
-            }
-        }
-    }
-
-    public func runWithResponse(
-        _ input: String,
-        session: (any Session)? = nil,
-        observer: (any AgentObserver)? = nil
-    ) async throws -> AgentResponse {
-        let result = try await run(input, session: session, observer: observer)
-        let responseID = responseID(from: result)
-        return makeResponse(from: result, responseID: responseID)
-    }
-
     // MARK: Private
 
-    // MARK: - Conversation History
-
-    private enum ConversationMessage: Sendable {
-        case system(String)
-        case user(String)
-        case assistant(String, toolCalls: [InferenceResponse.ParsedToolCall] = [])
-        case toolResult(toolName: String, result: String, toolCallID: String? = nil)
-
-        var formatted: String {
-            switch self {
-            case let .system(content):
-                return "[System]: \(content)"
-            case let .user(content):
-                return "[User]: \(content)"
-            case let .assistant(content, toolCalls):
-                if toolCalls.isEmpty {
-                    return "[Assistant]: \(content)"
-                }
-
-                let summary = toolCalls.map { "Calling tool: \($0.name)" }.joined(separator: ", ")
-                if content.isEmpty {
-                    return "[Assistant]: \(summary)"
-                }
-
-                return "[Assistant]: \(content)\n[Assistant Tool Calls]: \(summary)"
-            case let .toolResult(toolName, result, _):
-                return "[Tool Result - \(toolName)]: \(result)"
-            }
-        }
-
-        var inferenceMessage: InferenceMessage {
-            switch self {
-            case let .system(content):
-                return .system(content)
-            case let .user(content):
-                return .user(content)
-            case let .assistant(content, toolCalls):
-                return .assistant(content, toolCalls: toolCalls.map(InferenceMessage.ToolCall.init))
-            case let .toolResult(toolName, result, toolCallID):
-                return .tool(name: toolName, content: result, toolCallID: toolCallID)
-            }
-        }
-    }
-
-    private var _handoffs: [AnyHandoffConfiguration]
+    private(set) var _handoffs: [AnyHandoffConfiguration]
 
     // MARK: - Internal State
 
     private var toolRegistry: ToolRegistry
-    private let cancellationState = ActiveRunCancellationState()
-    private static let autoResponseTracker = ResponseTracker()
-    private static let defaultMemorySessionTracker = DefaultMemorySessionTracker()
-    private static let responseIDMetadataKey = "response.id"
-    private static let transcriptSchemaVersionMetadataKey = "swarm.transcript.schema_version"
-    private static let transcriptHashMetadataKey = "swarm.transcript.hash"
-    private static let structuredOutputJSONMetadataKey = "structured_output.raw_json"
-    private static let structuredOutputSourceMetadataKey = "structured_output.source"
-    private static let structuredOutputFormatMetadataKey = "structured_output.format"
+    /// Registry of in-flight runs; copies of this value share the actor, so
+    /// every run started through any copy is reachable from ``cancel()``.
+    let activeRuns = ActiveRunRegistry()
+    /// Created from ``AgentConfiguration/resilience`` at init. Copies of this value share the actor.
+    let inferenceCircuitBreaker: CircuitBreaker?
+    /// Created from ``AgentConfiguration/resilience`` at init. Copies of this value share the actor.
+    let inferenceRateLimiter: RateLimiter?
+    /// Per-run dependency bundle (response tracker, default-memory session
+    /// tracker, shared configuration source). Defaults to ``AgentRunEnvironment/live``;
+    /// a separately constructed environment isolates tracker state per agent.
+    let runEnvironment: AgentRunEnvironment
 
-    private struct InternalRunResult: Sendable {
+    /// Shared default environment backing agents constructed through public initializers.
+    /// All such agents observe one instance, preserving the former process-global
+    /// sharing semantics across agent copies.
+    static let defaultRunEnvironment = AgentRunEnvironment.live
+
+    /// Former process-global response tracker; delegates to ``defaultRunEnvironment``.
+    static var autoResponseTracker: ResponseTracker { defaultRunEnvironment.responseTracker }
+
+    /// Former process-global default-memory session tracker; delegates to ``defaultRunEnvironment``.
+    static var defaultMemorySessionTracker: DefaultMemorySessionTracker { defaultRunEnvironment.defaultMemorySessionTracker }
+
+    static let responseIDMetadataKey = "response.id"
+    static let transcriptSchemaVersionMetadataKey = "swarm.transcript.schema_version"
+    static let transcriptHashMetadataKey = "swarm.transcript.hash"
+    static let structuredOutputJSONMetadataKey = "structured_output.raw_json"
+    static let structuredOutputSourceMetadataKey = "structured_output.source"
+    static let structuredOutputFormatMetadataKey = "structured_output.format"
+
+    struct InternalRunResult: Sendable {
         let agentResult: AgentResult
         let structuredOutput: StructuredOutputResult?
     }
 
-    private struct ToolLoopOutcome: Sendable {
+    struct ToolLoopOutcome: Sendable {
         let output: String
         let structuredOutput: StructuredOutputResult?
         let transcriptMessages: [MemoryMessage]
     }
 
-    private struct FinalAssistantResponse: Sendable {
+    struct FinalAssistantResponse: Sendable {
         let content: String
         let structuredOutput: StructuredOutputResult?
     }
 
-    private actor ActiveRunCancellationState {
-        private var activeRunID: UUID?
-        private var activeTask: Task<InternalRunResult, Error>?
-
-        func begin(runID: UUID, task: Task<InternalRunResult, Error>) {
-            activeRunID = runID
-            activeTask = task
-        }
-
-        func finish(runID: UUID) {
-            guard activeRunID == runID else { return }
-            activeRunID = nil
-            activeTask = nil
-        }
-
-        func cancelCurrent() {
-            activeTask?.cancel()
-        }
-    }
-
-    private final class TimedOperationCoordinator<T: Sendable>: @unchecked Sendable {
-        private let lock = NSLock()
-        private var continuation: CheckedContinuation<T, Error>?
-        private var operationTask: Task<Void, Never>?
-        private var timeoutTask: Task<Void, Never>?
-        private var completed = false
-
-        func install(continuation: CheckedContinuation<T, Error>) {
-            lock.lock()
-            defer { lock.unlock() }
-            self.continuation = continuation
-        }
-
-        func setOperationTask(_ task: Task<Void, Never>) {
-            lock.lock()
-            defer { lock.unlock() }
-            operationTask = task
-        }
-
-        func setTimeoutTask(_ task: Task<Void, Never>) {
-            lock.lock()
-            defer { lock.unlock() }
-            timeoutTask = task
-        }
-
-        func finish(returning value: T) {
-            complete { continuation in
-                continuation.resume(returning: value)
-            }
-        }
-
-        func finish(throwing error: Error) {
-            complete { continuation in
-                continuation.resume(throwing: error)
-            }
-        }
-
-        func cancelPending(with error: Error) {
-            let pendingState = takePendingState()
-            pendingState.operationTask?.cancel()
-            pendingState.timeoutTask?.cancel()
-            pendingState.continuation?.resume(throwing: error)
-        }
-
-        private func complete(_ resume: (CheckedContinuation<T, Error>) -> Void) {
-            let pendingState = takePendingState()
-            pendingState.operationTask?.cancel()
-            pendingState.timeoutTask?.cancel()
-            guard let continuation = pendingState.continuation else { return }
-            resume(continuation)
-        }
-
-        private func takePendingState() -> (
-            continuation: CheckedContinuation<T, Error>?,
-            operationTask: Task<Void, Never>?,
-            timeoutTask: Task<Void, Never>?
-        ) {
-            lock.lock()
-            defer { lock.unlock() }
-
-            guard completed == false else {
-                return (nil, nil, nil)
-            }
-
-            completed = true
-            let pendingContinuation = continuation
-            let pendingOperationTask = operationTask
-            let pendingTimeoutTask = timeoutTask
-            continuation = nil
-            operationTask = nil
-            timeoutTask = nil
-            return (pendingContinuation, pendingOperationTask, pendingTimeoutTask)
-        }
-    }
-
-    private actor DefaultMemorySessionTracker {
-        private var sessionIDs: [ObjectIdentifier: String] = [:]
-        private var activeSessionIDs: [ObjectIdentifier: String] = [:]
-        private var activeCounts: [ObjectIdentifier: Int] = [:]
-        // Waiters are keyed by a per-call UUID so a cancellation can target the
-        // exact parked task without disturbing siblings. `endRun()` resumes any
-        // remaining waiters with success; cancellation resumes the targeted
-        // waiter with `CancellationError` and removes it from the map.
-        private var waiters: [ObjectIdentifier: [UUID: CheckedContinuation<Void, Error>]] = [:]
-
-        func beginRun(for key: ObjectIdentifier, sessionID: String) async throws -> Bool {
-            while let activeSessionID = activeSessionIDs[key],
-                  activeSessionID != sessionID
-            {
-                try Task.checkCancellation()
-                try await waitForSessionRelease(key: key)
-            }
-
-            // Final cancellation check after exiting the wait loop. Closes the
-            // race where `endRun` resumes the continuation just as the parent
-            // task is cancelled — without this, the resumed task would proceed
-            // to claim the slot and trigger memory-clear side effects.
-            try Task.checkCancellation()
-
-            let previous = sessionIDs[key]
-            sessionIDs[key] = sessionID
-            activeSessionIDs[key] = sessionID
-            activeCounts[key, default: 0] += 1
-            return previous != sessionID
-        }
-
-        func endRun(for key: ObjectIdentifier) {
-            let remaining = (activeCounts[key] ?? 1) - 1
-            if remaining > 0 {
-                activeCounts[key] = remaining
-                return
-            }
-
-            activeCounts[key] = nil
-            activeSessionIDs[key] = nil
-            let pendingWaiters = waiters.removeValue(forKey: key) ?? [:]
-            for (_, continuation) in pendingWaiters {
-                continuation.resume()
-            }
-        }
-
-        /// Park the calling task until either the active session releases (success)
-        /// or the calling task is cancelled (throws `CancellationError`). Without
-        /// the cancellation arm, a cancelled task would stay parked until the
-        /// holder of the active session calls `endRun()`, then wake up and claim
-        /// the slot — performing memory clears and other side effects before the
-        /// cancellation surfaces deeper in execution.
-        private func waitForSessionRelease(key: ObjectIdentifier) async throws {
-            let waiterID = UUID()
-            try await withTaskCancellationHandler {
-                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                    if Task.isCancelled {
-                        continuation.resume(throwing: CancellationError())
-                        return
-                    }
-                    waiters[key, default: [:]][waiterID] = continuation
-                }
-            } onCancel: {
-                Task { await self.cancelWaiter(key: key, id: waiterID) }
-            }
-        }
-
-        private func cancelWaiter(key: ObjectIdentifier, id: UUID) {
-            if let continuation = waiters[key]?.removeValue(forKey: id) {
-                if waiters[key]?.isEmpty == true {
-                    waiters[key] = nil
-                }
-                continuation.resume(throwing: CancellationError())
-            }
-        }
-    }
-
-    private func runInternal(
-        _ input: String,
-        session: (any Session)? = nil,
-        observer: (any AgentObserver)? = nil,
-        structuredOutputRequest: StructuredOutputRequest?
-    ) async throws -> InternalRunResult {
-        guard !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw AgentError.invalidInput(reason: "Input cannot be empty")
-        }
-
-        let activeTracer = tracer
-            ?? AgentEnvironmentValues.current.tracer
-            ?? (configuration.defaultTracingEnabled ? SwiftLogTracer(minimumLevel: .debug) : nil)
-        let activeMemory = resolvedMemory()
-        let lifecycleMemory = activeMemory as? any MemorySessionLifecycle
-        var defaultMemoryRunKey: ObjectIdentifier?
-
-        if let session,
-           let activeMemory,
-           let defaultMemory
-        {
-            let activeMemoryObject = activeMemory as AnyObject
-            let defaultMemoryObject = defaultMemory as AnyObject
-            if activeMemoryObject === defaultMemoryObject {
-                let memoryKey = ObjectIdentifier(activeMemoryObject)
-                defaultMemoryRunKey = memoryKey
-                if try await Self.defaultMemorySessionTracker.beginRun(for: memoryKey, sessionID: session.sessionId) {
-                    await activeMemory.clear()
-                }
-            }
-        }
-
-        let tracing = TracingHelper(
-            tracer: activeTracer,
-            agentName: configuration.name.isEmpty ? "Agent" : configuration.name
-        )
-        let runtimeToolRegistry = try await resolvedToolRegistry()
-        await tracing.traceStart(input: input)
-
-        // Notify observer of agent start
-        await observer?.onAgentStart(context: nil, agent: self, input: input)
-
-        if let lifecycleMemory {
-            await lifecycleMemory.beginMemorySession()
-        }
-
-        do {
-            // Run input guardrails (with observer for event emission)
-            let runner = GuardrailRunner(configuration: guardrailRunnerConfiguration, observer: observer)
-            _ = try await runner.runInputGuardrails(inputGuardrails, input: input, context: nil)
-
-            // Reset cancellation state and create result builder
-            let resultBuilder = AgentResult.Builder()
-            _ = resultBuilder.start()
-            let responseID = UUID().uuidString
-            _ = resultBuilder.setMetadata(Self.responseIDMetadataKey, .string(responseID))
-            if let structuredOutputRequest {
-                _ = resultBuilder.setMetadata(
-                    Self.structuredOutputFormatMetadataKey,
-                    .string(Self.structuredOutputFormatDescription(structuredOutputRequest.format))
-                )
-            }
-
-            // Load conversation history from session (limit to recent messages)
-            var sessionHistory: [MemoryMessage] = []
-            if let session {
-                sessionHistory = try await session.getItems(limit: configuration.sessionHistoryLimit)
-            }
-
-            let replayTranscript = SwarmTranscript(memoryMessages: sessionHistory)
-            try replayTranscript.validateReplayCompatibility()
-
-            // Seed memory with session history once (only if memory is empty and the memory allows it).
-            let importPolicy = activeMemory as? any MemorySessionImportPolicy
-            let allowsSessionSeeding = importPolicy?.allowsAutomaticSessionSeeding ?? true
-            if let activeMemory, allowsSessionSeeding, !sessionHistory.isEmpty, await activeMemory.isEmpty {
-                if let replayAware = activeMemory as? any MemorySessionReplayAware {
-                    await replayAware.importSessionHistory(sessionHistory)
-                } else {
-                    for message in sessionHistory {
-                        await activeMemory.add(message)
-                    }
-                }
-            }
-
-            // Create user message for this turn
-            let userMessage = SwarmTranscriptCodec.encodeMessage(role: .user, content: input)
-
-            // Execute the tool calling loop with session context
-            let provider = try await resolvedInferenceProvider(toolRegistry: runtimeToolRegistry)
-            let runtimeEnvironment = runtimeEnvironment(for: provider)
-            let toolLoopOutcome = try await AgentEnvironmentValues.$current.withValue(runtimeEnvironment) {
-                try await executeToolCallingLoop(
-                    input: input,
-                    toolRegistry: runtimeToolRegistry,
-                    provider: provider,
-                    sessionHistory: sessionHistory,
-                    session: session,
-                    resultBuilder: resultBuilder,
-                    observer: observer,
-                    tracing: tracing,
-                    structuredOutputRequest: structuredOutputRequest
-                )
-            }
-
-            _ = resultBuilder.setOutput(toolLoopOutcome.output)
-            applyStructuredOutputMetadata(toolLoopOutcome.structuredOutput, to: resultBuilder)
-
-            // Run output guardrails BEFORE storing in session/memory
-            _ = try await runner.runOutputGuardrails(
-                outputGuardrails,
-                output: toolLoopOutcome.output,
-                agent: self,
-                context: nil
-            )
-
-            // Store turn in session for conversation persistence
-            // Session is the source of truth for conversation history
-            if let session {
-                try await session.addItems([userMessage] + toolLoopOutcome.transcriptMessages)
-
-                let persistedTranscript = SwarmTranscript(memoryMessages: try await session.getAllItems())
-                try persistedTranscript.validateReplayCompatibility()
-                _ = resultBuilder.setMetadata(
-                    Self.transcriptSchemaVersionMetadataKey,
-                    .string(persistedTranscript.schemaVersion.rawValue)
-                )
-                if let transcriptHash = try? persistedTranscript.transcriptHash() {
-                    _ = resultBuilder.setMetadata(Self.transcriptHashMetadataKey, .string(transcriptHash))
-                }
-            }
-
-            // Memory provides additional context (RAG, summaries) - NOT for conversation storage
-            // This avoids duplication: session stores conversation, memory provides context
-            // Note: If using memory for conversation context, populate it from session on demand
-
-            _ = resultBuilder.setMetadata(RuntimeMetadata.runtimeEngineKey, .string(RuntimeMetadata.graphRuntimeEngineName))
-            let result = resultBuilder.build()
-            if configuration.autoPreviousResponseId, let session {
-                let response = makeResponse(from: result, responseID: responseID)
-                await Self.autoResponseTracker.recordResponse(response, sessionId: session.sessionId)
-            }
-            await tracing.traceComplete(result: result)
-
-            // Notify observer of agent completion
-            await observer?.onAgentEnd(context: nil, agent: self, result: result)
-
-            if let lifecycleMemory {
-                await lifecycleMemory.endMemorySession()
-            }
-            if let defaultMemoryRunKey {
-                await Self.defaultMemorySessionTracker.endRun(for: defaultMemoryRunKey)
-            }
-            return InternalRunResult(agentResult: result, structuredOutput: toolLoopOutcome.structuredOutput)
-        } catch {
-            let normalizedError = normalizeCancellation(error)
-            // Notify observer of error
-            await observer?.onError(context: nil, agent: self, error: normalizedError)
-            await tracing.traceError(normalizedError)
-            if let lifecycleMemory {
-                await lifecycleMemory.endMemorySession()
-            }
-            if let defaultMemoryRunKey {
-                await Self.defaultMemorySessionTracker.endRun(for: defaultMemoryRunKey)
-            }
-            throw normalizedError
-        }
-    }
-
-    // MARK: - Inference Provider Resolution
-
-    private func resolvedInferenceProvider(toolRegistry: ToolRegistry) async throws -> any InferenceProvider {
-        if configuration.inferencePolicy?.privacyRequired == true {
-            return try await resolvedPrivateInferenceProvider()
-        }
-
-        // 1. Explicit provider on Agent
-        if let inferenceProvider {
-            return transformedInferenceProvider(inferenceProvider)
-        }
-
-        // 2. TaskLocal via .environment()
-        if let environmentProvider = AgentEnvironmentValues.current.inferenceProvider {
-            return transformedInferenceProvider(environmentProvider)
-        }
-
-        // 3. Swarm.defaultProvider (global)
-        if let globalProvider = await Swarm.defaultProvider {
-            return transformedInferenceProvider(globalProvider)
-        }
-
-        // 4. Swarm.cloudProvider (if tool calling is required)
-        let hasEnabledTools = await !toolRegistry.schemas.isEmpty
-        let needsToolCallingProvider = hasEnabledTools || !_handoffs.isEmpty
-        if needsToolCallingProvider, let cloudProvider = await Swarm.cloudProvider {
-            return transformedInferenceProvider(cloudProvider)
-        }
-
-        // 5. Foundation Models (if available, on Apple platform)
-        if let foundationModelsProvider = DefaultInferenceProviderFactory.makeFoundationModelsProviderIfAvailable() {
-            return transformedInferenceProvider(foundationModelsProvider)
-        }
-
-        // 6. No provider available
-        throw AgentError.inferenceProviderUnavailable(
-            reason: """
-            No inference provider configured and Apple Foundation Models are unavailable.
-
-            Configure a provider globally via `await Swarm.configure(provider: ...)` \
-            or pass one explicitly to Agent(...).
-            """
-        )
-    }
-
-    private func resolvedPrivateInferenceProvider() async throws -> any InferenceProvider {
-        if let foundationModelsProvider = DefaultInferenceProviderFactory.makeFoundationModelsProviderIfAvailable() {
-            return transformedInferenceProvider(foundationModelsProvider)
-        }
-
-        if let provider = privateInferenceProvider(inferenceProvider) {
-            return transformedInferenceProvider(provider)
-        }
-
-        if let provider = privateInferenceProvider(AgentEnvironmentValues.current.inferenceProvider) {
-            return transformedInferenceProvider(provider)
-        }
-
-        if let globalProvider = await Swarm.defaultProvider,
-           let provider = privateInferenceProvider(globalProvider)
-        {
-            return transformedInferenceProvider(provider)
-        }
-
-        // Mirror the non-private resolver's cloud-provider fallback: if the operator
-        // configured a privacy-capable provider via `Swarm.configure(cloudProvider: ...)`
-        // (common for tool/handoff flows), honor it. The capability filter in
-        // `privateInferenceProvider(_:)` ensures we only return it if it actually
-        // reports `.privateInference`.
-        if let cloudProvider = await Swarm.cloudProvider,
-           let provider = privateInferenceProvider(cloudProvider)
-        {
-            return transformedInferenceProvider(provider)
-        }
-
-        throw AgentError.inferenceProviderUnavailable(
-            reason: """
-            AgentConfiguration.inferencePolicy.privacyRequired is true, but no private inference provider is available.
-
-            Use Apple Foundation Models on a supported device, or configure a provider that reports \
-            InferenceProviderCapabilities.privateInference.
-            """
-        )
-    }
-
-    private func privateInferenceProvider(_ provider: (any InferenceProvider)?) -> (any InferenceProvider)? {
-        guard let provider else {
-            return nil
-        }
-
-        let capabilities = InferenceProviderCapabilities.resolved(for: provider)
-        guard capabilities.contains(.privateInference) else {
-            return nil
-        }
-        return provider
-    }
-
-    private func transformedInferenceProvider(_ provider: any InferenceProvider) -> any InferenceProvider {
-        guard let transform = AgentEnvironmentValues.current.inferenceProviderTransform else {
-            return provider
-        }
-        return transform(provider)
-    }
-
-    private func resolvedMembraneAdapter() -> (any MembraneAgentAdapter)? {
-        let membrane = AgentEnvironmentValues.current.membrane ?? .enabled
-        guard membrane.isEnabled else {
-            return nil
-        }
-        if let adapter = membrane.adapter {
-            return adapter
-        }
-        return DefaultMembraneAgentAdapter(configuration: membrane.configuration)
-    }
-
-    private func runtimeEnvironment(for provider: any InferenceProvider) -> AgentEnvironment {
-        var environment = AgentEnvironmentValues.current
-        if let tokenCounter = provider as? any PromptTokenCountingInferenceProvider {
-            environment.promptTokenCounter = tokenCounter
-        }
-        return environment
-    }
-
-    private func resolvedMemory() -> (any Memory)? {
-        memory ?? AgentEnvironmentValues.current.memory ?? defaultMemory
-    }
-
-    private static func makeDefaultMemory() throws -> any Memory {
-        if SwarmRuntimeEnvironment.isRunningTests {
-            let root = FileManager.default.temporaryDirectory
-                .appendingPathComponent("SwarmDefaultMemoryTests", isDirectory: true)
-                .appendingPathComponent(UUID().uuidString, isDirectory: true)
-            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-            return try DefaultAgentMemory(configuration: DefaultAgentMemory.Configuration(
-                waxStoreURL: root.appendingPathComponent("wax-memory.mv2s")
-            ))
-        }
-        return try DefaultAgentMemory()
-    }
-
-    private func resolvedToolRegistry() async throws -> ToolRegistry {
-        let baseTools = await toolRegistry.allTools
-        guard !baseTools.contains(where: { $0.name == "websearch" }) else {
-            return try ToolRegistry(tools: baseTools)
-        }
-
-        let taskLocalWeb = AgentEnvironmentValues.current.webSearch
-        let ambientWeb = if let taskLocalWeb { taskLocalWeb } else { await Swarm.webConfiguration }
-        guard let ambientWeb,
-              ambientWeb.enabled
-        else {
-            return try ToolRegistry(tools: baseTools)
-        }
-
-        var tools = baseTools
-        tools.append(WebSearchTool(configuration: ambientWeb))
-        return try ToolRegistry(tools: tools)
-    }
-
-    private func resolvedInferenceOptions(
-        session: (any Session)?,
-        provider: any InferenceProvider
-    ) async -> InferenceOptions {
-        var options = configuration.inferenceOptions
-
-        let capabilities = providerCapabilities(for: provider)
-        guard capabilities.contains(.responseContinuation) else {
-            options.previousResponseId = nil
-            return options
-        }
-
-        if let explicit = configuration.previousResponseId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !explicit.isEmpty {
-            options.previousResponseId = explicit
-            return options
-        }
-
-        guard configuration.autoPreviousResponseId, let session else {
-            return options
-        }
-
-        if let latestResponseID = await Self.autoResponseTracker.getLatestResponseId(for: session.sessionId) {
-            options.previousResponseId = latestResponseID
-        }
-
-        return options
-    }
-
-    private func providerCapabilities(for provider: any InferenceProvider) -> InferenceProviderCapabilities {
-        InferenceProviderCapabilities.resolved(for: provider)
-    }
-
-    private func responseID(from result: AgentResult) -> String {
-        if case let .string(value)? = result.metadata[Self.responseIDMetadataKey], !value.isEmpty {
-            return value
-        }
-        return UUID().uuidString
-    }
-
-    private func makeResponse(from result: AgentResult, responseID: String) -> AgentResponse {
-        let toolCallsById = Dictionary(uniqueKeysWithValues: result.toolCalls.map { ($0.id, $0) })
-        let toolCallRecords: [ToolCallRecord] = result.toolResults.compactMap { toolResult in
-            guard let toolCall = toolCallsById[toolResult.callId] else {
-                Log.agents.warning("Tool result missing matching call: \(toolResult.callId)")
-                return nil
-            }
-
-            return ToolCallRecord(
-                toolName: toolCall.toolName,
-                arguments: toolCall.arguments,
-                result: toolResult.output,
-                duration: toolResult.duration,
-                timestamp: toolCall.timestamp,
-                isSuccess: toolResult.isSuccess,
-                errorMessage: toolResult.errorMessage
-            )
-        }
-
-        return AgentResponse(
-            responseId: responseID,
-            output: result.output,
-            agentName: configuration.name,
-            metadata: result.metadata,
-            toolCalls: toolCallRecords,
-            usage: result.tokenUsage,
-            iterationCount: result.iterationCount
-        )
-    }
-
-    private func applyStructuredOutputMetadata(
-        _ structuredOutput: StructuredOutputResult?,
-        to resultBuilder: AgentResult.Builder
-    ) {
-        guard let structuredOutput else { return }
-
-        _ = resultBuilder.setMetadata(Self.structuredOutputJSONMetadataKey, .string(structuredOutput.rawJSON))
-        _ = resultBuilder.setMetadata(Self.structuredOutputSourceMetadataKey, .string(structuredOutput.source.rawValue))
-        _ = resultBuilder.setMetadata(
-            Self.structuredOutputFormatMetadataKey,
-            .string(Self.structuredOutputFormatDescription(structuredOutput.format))
-        )
-    }
-
-    private func finalizeAssistantResponse(
-        content: String,
-        request: StructuredOutputRequest?,
-        provider: any InferenceProvider
-    ) throws -> FinalAssistantResponse {
-        guard let request else {
-            return FinalAssistantResponse(content: content, structuredOutput: nil)
-        }
-
-        let source: StructuredOutputResult.Source = providerCapabilities(for: provider).contains(.structuredOutputs)
-            ? .providerNative
-            : .promptFallback
-        let structuredOutput = try StructuredOutputParser.parse(content, request: request, source: source)
-        return FinalAssistantResponse(content: structuredOutput.rawJSON, structuredOutput: structuredOutput)
-    }
-
-    private static func structuredOutputFormatDescription(_ format: StructuredOutputFormat) -> String {
-        switch format {
-        case .jsonObject:
-            return "json_object"
-        case .jsonSchema(let name, _):
-            return "json_schema:\(name)"
-        }
-    }
-
-    // MARK: - Tool Calling Loop Implementation
-
-    private func executeToolCallingLoop(
-        input: String,
-        toolRegistry: ToolRegistry,
-        provider: any InferenceProvider,
-        sessionHistory: [MemoryMessage] = [],
-        session: (any Session)?,
-        resultBuilder: AgentResult.Builder,
-        observer: (any AgentObserver)? = nil,
-        tracing: TracingHelper? = nil,
-        structuredOutputRequest: StructuredOutputRequest?
-    ) async throws -> ToolLoopOutcome {
-        var iteration = 0
-        let startTime = ContinuousClock.now
-        var inferenceOptions = await resolvedInferenceOptions(session: session, provider: provider)
-        if let structuredOutputRequest {
-            inferenceOptions.structuredOutput = structuredOutputRequest
-        }
-
-        // Retrieve relevant context from memory (enables RAG for VectorMemory)
-        let activeMemory = resolvedMemory()
-        var memoryContext = ""
-        if let mem = activeMemory {
-            let contextProfile = configuration.effectiveContextProfile
-            let tokenLimit = contextProfile.memoryTokenLimit
-            memoryContext = try await executeWithinRemainingTimeout(startTime: startTime) {
-                if let policyAwareMemory = mem as? any MemoryRetrievalPolicyAware {
-                    return await policyAwareMemory.context(
-                        for: MemoryQuery(
-                            text: input,
-                            tokenLimit: tokenLimit,
-                            maxItems: contextProfile.maxRetrievedItems,
-                            maxItemTokens: contextProfile.maxRetrievedItemTokens
-                        )
-                    )
-                }
-                return await mem.context(for: input, tokenLimit: tokenLimit)
-            }
-        }
-
-        var conversationHistory = try buildInitialConversationHistory(
-            sessionHistory: sessionHistory,
-            input: input,
-            memory: activeMemory,
-            memoryContext: memoryContext
-        )
-        var transcriptMessages: [MemoryMessage] = []
-        let systemMessage = buildSystemMessage(memory: activeMemory, memoryContext: memoryContext)
-
-        let enableStreaming = configuration.enableStreaming && observer != nil
-        let structuredToolStreamingProvider = provider as? any ToolCallStreamingConversationInferenceProvider
-        let promptToolStreamingProvider = provider as? any ToolCallStreamingInferenceProvider
-        let useToolStreaming = enableStreaming && (structuredToolStreamingProvider != nil || promptToolStreamingProvider != nil)
-        let membraneAdapter = resolvedMembraneAdapter()
-
-        while iteration < configuration.maxIterations {
-            iteration += 1
-            _ = resultBuilder.incrementIteration()
-            await observer?.onIterationStart(context: nil, agent: self, number: iteration)
-
-            do {
-                try checkCancellationAndTimeout(startTime: startTime)
-
-                let rawPrompt: String
-                if configuration.effectiveContextProfile.preset == .strict4k {
-                    // Use ContextCore's intelligent windowing if available.
-                    // DefaultAgentMemory wraps ContextCoreMemory internally.
-                    let historyBudget = configuration.effectiveContextProfile.budget.workingTokens
-                    let lastMsg = conversationHistory.last
-                    let query: String
-                    switch lastMsg {
-                    case .assistant(let content, _):
-                        query = content
-                    case .toolResult(_, let output, _):
-                        query = String(output.prefix(200))
-                    default:
-                        query = input
-                    }
-                    var windowedContext = ""
-                    if let defaultMem = activeMemory as? DefaultAgentMemory {
-                        windowedContext = await defaultMem.context(for: query, tokenLimit: historyBudget)
-                    } else if let ccMemory = activeMemory as? ContextCoreMemory {
-                        windowedContext = await ccMemory.context(for: query, tokenLimit: historyBudget)
-                    }
-                    if !windowedContext.isEmpty {
-                        let livePrompt = buildPrompt(from: conversationHistory)
-                        rawPrompt = """
-                        [Retrieved Context]
-                        \(windowedContext)
-
-                        [Current Conversation]
-                        \(livePrompt)
-                        """
-                    } else {
-                        // Fallback: manual pruning with summarization.
-                        var capped = conversationHistory
-                        for i in capped.indices {
-                            if case .toolResult(let toolName, let output, let toolCallID) = capped[i], output.count > 400 {
-                                capped[i] = .toolResult(toolName: toolName, result: String(output.prefix(400)) + "\n[... truncated ...]", toolCallID: toolCallID)
-                            }
-                            if case .assistant(let content, let toolCalls) = capped[i], !toolCalls.isEmpty {
-                                let nameOnlyCalls = toolCalls.map { tc in
-                                    InferenceResponse.ParsedToolCall(id: tc.id, name: tc.name, arguments: [:])
-                                }
-                                capped[i] = .assistant(content, toolCalls: nameOnlyCalls)
-                            }
-                        }
-                        if capped.count > 6 {
-                            let head = capped.prefix(2)
-                            let tail = capped.suffix(3)
-                            let middle = capped.dropFirst(2).dropLast(3)
-                            var summaryParts: [String] = []
-                            for msg in middle {
-                                switch msg {
-                                case .assistant(_, let toolCalls) where !toolCalls.isEmpty:
-                                    summaryParts.append("called " + toolCalls.map(\.name).joined(separator: ", "))
-                                case .toolResult(let toolName, let output, _):
-                                    summaryParts.append("\(toolName): \(output.prefix(40).replacingOccurrences(of: "\n", with: " "))")
-                                default:
-                                    break
-                                }
-                            }
-                            var pruned = Array(head)
-                            pruned.append(.assistant("[summary: \(summaryParts.joined(separator: "; "))]", toolCalls: []))
-                            pruned.append(contentsOf: tail)
-                            rawPrompt = buildPrompt(from: pruned)
-                        } else if capped.count > 5 {
-                            var pruned = Array(capped.prefix(2))
-                            pruned.append(.assistant("[... truncated ...]", toolCalls: []))
-                            pruned.append(contentsOf: capped.suffix(3))
-                            rawPrompt = buildPrompt(from: pruned)
-                        } else {
-                            rawPrompt = buildPrompt(from: capped)
-                        }
-                    }
-                } else {
-                    rawPrompt = buildPrompt(from: conversationHistory)
-                }
-                let unplannedSchemas = await buildToolSchemasWithHandoffs(toolRegistry: toolRegistry)
-                var plannedPrompt = rawPrompt
-                var plannedSchemas = MembraneInternalTools.sortedSchemas(unplannedSchemas)
-
-                if let membraneAdapter {
-                    do {
-                        let plan = try await membraneAdapter.plan(
-                            prompt: rawPrompt,
-                            toolSchemas: unplannedSchemas,
-                            profile: configuration.effectiveContextProfile
-                        )
-                        plannedPrompt = plan.prompt
-                        plannedSchemas = MembraneInternalTools.sortedSchemas(plan.toolSchemas)
-                        _ = resultBuilder.setMetadata("membrane.mode", .string(plan.mode))
-                    } catch {
-                        _ = resultBuilder.setMetadata("membrane.fallback.used", .bool(true))
-                        _ = resultBuilder.setMetadata("membrane.fallback.error", .string(fallbackDiagnosticMessage(for: error)))
-                        plannedPrompt = rawPrompt
-                        plannedSchemas = MembraneInternalTools.sortedSchemas(unplannedSchemas)
-                    }
-                }
-
-                let prompt = await PromptEnvelope.enforce(
-                    prompt: plannedPrompt,
-                    profile: configuration.effectiveContextProfile
-                )
-                let toolSchemas: [ToolSchema] = {
-                    var schemas = MembraneInternalTools.sortedSchemas(plannedSchemas)
-                    // For strict4k, strip tool descriptions to save ~120 tokens.
-                    if configuration.effectiveContextProfile.preset == .strict4k {
-                        schemas = schemas.map { ToolSchema(name: $0.name, description: $0.name, parameters: $0.parameters) }
-                    }
-                    return schemas
-                }()
-                let providerAcceptsStructuredMessages = provider is any ConversationInferenceProvider
-                let structuredMessages: [InferenceMessage]? = if configuration.effectiveContextProfile.preset == .strict4k {
-                    nil
-                } else if providerAcceptsStructuredMessages {
-                    conversationHistory.map(\.inferenceMessage)
-                } else if prompt == rawPrompt {
-                    conversationHistory.map(\.inferenceMessage)
-                } else {
-                    nil
-                }
-
-                // If no tools defined, generate without tool calling
-                if toolSchemas.isEmpty {
-                    let loopInferenceOptions = inferenceOptions
-                    let response = try await executeWithinRemainingTimeout(startTime: startTime) {
-                        try await generateWithoutTools(
-                            provider: provider,
-                            prompt: prompt,
-                            messages: structuredMessages,
-                            systemPrompt: systemMessage,
-                            inferenceOptions: loopInferenceOptions,
-                            enableStreaming: enableStreaming,
-                            observer: observer
-                        )
-                    }
-                    transcriptMessages.append(
-                        SwarmTranscriptCodec.encodeMessage(
-                            role: .assistant,
-                            content: response.content,
-                            toolCalls: [],
-                            structuredOutput: response.structuredOutput
-                        )
-                    )
-                    await observer?.onIterationEnd(context: nil, agent: self, number: iteration)
-                    return ToolLoopOutcome(
-                        output: response.content,
-                        structuredOutput: response.structuredOutput,
-                        transcriptMessages: transcriptMessages
-                    )
-                }
-
-                // Generate response with tool calls
-                let loopInferenceOptions = inferenceOptions
-                let response = if useToolStreaming {
-                    try await executeWithinRemainingTimeout(startTime: startTime) {
-                        try await generateWithToolsStreaming(
-                            provider: provider,
-                            prompt: prompt,
-                            messages: structuredMessages,
-                            tools: toolSchemas,
-                            inferenceOptions: loopInferenceOptions,
-                            systemPrompt: systemMessage,
-                            observer: observer
-                        )
-                    }
-                } else {
-                    try await executeWithinRemainingTimeout(startTime: startTime) {
-                        try await generateWithTools(
-                            provider: provider,
-                            prompt: prompt,
-                            messages: structuredMessages,
-                            tools: toolSchemas,
-                            inferenceOptions: loopInferenceOptions,
-                            systemPrompt: systemMessage,
-                            observer: observer,
-                            emitOutputTokens: enableStreaming
-                        )
-                    }
-                }
-
-                if response.hasToolCalls {
-                    let handoffResult = try await processToolCallsWithHandoffs(
-                        response: response,
-                        toolRegistry: toolRegistry,
-                        conversationHistory: &conversationHistory,
-                        transcriptMessages: &transcriptMessages,
-                        resultBuilder: resultBuilder,
-                        observer: observer,
-                        tracing: tracing,
-                        membraneAdapter: membraneAdapter,
-                        startTime: startTime
-                    )
-                    // If a handoff occurred, return the target agent's result
-                    if let handoffOutput = handoffResult {
-                        await observer?.onIterationEnd(context: nil, agent: self, number: iteration)
-                        return ToolLoopOutcome(
-                            output: handoffOutput.content,
-                            structuredOutput: handoffOutput.structuredOutput,
-                            transcriptMessages: transcriptMessages
-                        )
-                    }
-                } else {
-                    guard let content = response.content else {
-                        throw AgentError.generationFailed(reason: "Model returned no content or tool calls")
-                    }
-                    let finalResponse = try finalizeAssistantResponse(
-                        content: content,
-                        request: structuredOutputRequest,
-                        provider: provider
-                    )
-                    transcriptMessages.append(
-                        SwarmTranscriptCodec.encodeMessage(
-                            role: .assistant,
-                            content: finalResponse.content,
-                            toolCalls: [],
-                            structuredOutput: finalResponse.structuredOutput
-                        )
-                    )
-                    await observer?.onIterationEnd(context: nil, agent: self, number: iteration)
-                    return ToolLoopOutcome(
-                        output: finalResponse.content,
-                        structuredOutput: finalResponse.structuredOutput,
-                        transcriptMessages: transcriptMessages
-                    )
-                }
-
-                await observer?.onIterationEnd(context: nil, agent: self, number: iteration)
-            } catch {
-                await observer?.onIterationEnd(context: nil, agent: self, number: iteration)
-                throw normalizeCancellation(error)
-            }
-        }
-
-        throw AgentError.maxIterationsExceeded(iterations: iteration)
-    }
-
-    /// Builds the initial conversation history from session history and user input.
-    private func buildInitialConversationHistory(
-        sessionHistory: [MemoryMessage],
-        input: String,
-        memory: (any Memory)?,
-        memoryContext: String = ""
-    ) throws -> [ConversationMessage] {
-        let transcript = SwarmTranscript(memoryMessages: sessionHistory)
-        try transcript.validateReplayCompatibility()
-
-        var history: [ConversationMessage] = []
-        history.append(.system(buildSystemMessage(memory: memory, memoryContext: memoryContext)))
-
-        for entry in transcript.entries {
-            switch entry.role {
-            case .user:
-                history.append(.user(entry.content))
-            case .assistant:
-                history.append(.assistant(
-                    entry.content,
-                    toolCalls: entry.toolCalls.map {
-                        InferenceResponse.ParsedToolCall(id: $0.id, name: $0.name, arguments: $0.arguments)
-                    }
-                ))
-            case .system:
-                history.append(.system(entry.content))
-            case .tool:
-                history.append(.toolResult(
-                    toolName: entry.toolName ?? "previous",
-                    result: entry.content,
-                    toolCallID: entry.toolCallID
-                ))
-            }
-        }
-
-        history.append(.user(input))
-        return history
-    }
-
-    /// Checks for cancellation and timeout conditions.
-    private func checkCancellationAndTimeout(startTime: ContinuousClock.Instant) throws {
-        // Use Task.checkCancellation() for reliable cancellation detection
-        // This is the standard Swift concurrency pattern
-        try Task.checkCancellation()
-
-        let elapsed = ContinuousClock.now - startTime
-        if elapsed > configuration.timeout {
-            throw AgentError.timeout(duration: configuration.timeout)
-        }
-    }
-
-    private func executeWithinRemainingTimeout<T: Sendable>(
-        startTime: ContinuousClock.Instant,
-        operation: @escaping @Sendable () async throws -> T
-    ) async throws -> T {
-        try Task.checkCancellation()
-
-        let remaining = configuration.timeout - (ContinuousClock.now - startTime)
-        if remaining <= .zero {
-            throw AgentError.timeout(duration: configuration.timeout)
-        }
-
-        let coordinator = TimedOperationCoordinator<T>()
-
-        return try await withTaskCancellationHandler(
-            operation: {
-                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, Error>) in
-                    coordinator.install(continuation: continuation)
-
-                    let operationTask = Task {
-                        do {
-                            coordinator.finish(returning: try await operation())
-                        } catch {
-                            coordinator.finish(throwing: error)
-                        }
-                    }
-                    coordinator.setOperationTask(operationTask)
-
-                    let timeoutTask = Task { [timeout = configuration.timeout, remaining] in
-                        do {
-                            try await Task.sleep(for: remaining)
-                            operationTask.cancel()
-                            coordinator.finish(throwing: AgentError.timeout(duration: timeout))
-                        } catch is CancellationError {
-                            return
-                        } catch {
-                            coordinator.finish(throwing: error)
-                        }
-                    }
-                    coordinator.setTimeoutTask(timeoutTask)
-                }
-            },
-            onCancel: {
-                coordinator.cancelPending(with: CancellationError())
-            }
-        )
-    }
-
-    private func normalizeCancellation(_ error: Error) -> Error {
-        if error is CancellationError {
-            return AgentError.cancelled
-        }
-        if let agentError = error as? AgentError, agentError == .cancelled {
-            return agentError
-        }
-        return error
-    }
-
-    private func fallbackDiagnosticMessage(for error: Error) -> String {
-        let described = String(describing: error)
-        if described != String(describing: type(of: error)) {
-            return described
-        }
-
-        let localized = error.localizedDescription
-        if !localized.isEmpty {
-            return localized
-        }
-
-        return String(describing: type(of: error))
-    }
-
-    /// Generates a response without tool calling.
-    private func generateWithoutTools(
-        provider: any InferenceProvider,
-        prompt: String,
-        messages: [InferenceMessage]?,
-        systemPrompt: String,
-        inferenceOptions: InferenceOptions,
-        enableStreaming: Bool = false,
-        observer: (any AgentObserver)?
-    ) async throws -> FinalAssistantResponse {
-        await observer?.onLLMStart(context: nil, agent: self, systemPrompt: systemPrompt, inputMessages: [MemoryMessage.user(prompt)])
-
-        let options = optionsWithMembraneRuntimeSettings(inferenceOptions)
-        let content: String
-        let structuredOutput: StructuredOutputResult?
-        if let request = options.structuredOutput {
-            let result: StructuredOutputResult
-            if let messages,
-               let nativeProvider = provider as? any StructuredOutputConversationInferenceProvider
-            {
-                result = try await nativeProvider.generateStructured(messages: messages, request: request, options: options)
-            } else if let messages,
-                      let conversationProvider = provider as? any ConversationInferenceProvider
-            {
-                result = try await conversationProvider.generateStructured(messages: messages, request: request, options: options)
-            } else if let nativeProvider = provider as? any StructuredOutputInferenceProvider {
-                result = try await nativeProvider.generateStructured(prompt: prompt, request: request, options: options)
-            } else {
-                result = try await provider.generateStructured(prompt: prompt, request: request, options: options)
-            }
-            content = result.rawJSON
-            structuredOutput = result
-        } else if enableStreaming {
-            var streamedContent = ""
-            streamedContent.reserveCapacity(1024)
-            let stream: AsyncThrowingStream<String, Error>
-            if let messages,
-               let conversationProvider = provider as? any StreamingConversationInferenceProvider {
-                stream = conversationProvider.stream(messages: messages, options: options)
-            } else {
-                stream = provider.stream(prompt: prompt, options: options)
-            }
-            for try await token in stream {
-                if !token.isEmpty {
-                    streamedContent += token
-                }
-                await observer?.onOutputToken(context: nil, agent: self, token: token)
-            }
-            content = streamedContent
-            structuredOutput = nil
-        } else {
-            if let messages,
-               let conversationProvider = provider as? any ConversationInferenceProvider {
-                content = try await conversationProvider.generate(messages: messages, options: options)
-            } else {
-                content = try await provider.generate(
-                    prompt: prompt,
-                    options: options
-                )
-            }
-            structuredOutput = nil
-        }
-
-        await observer?.onLLMEnd(context: nil, agent: self, response: content, usage: nil)
-        return FinalAssistantResponse(content: content, structuredOutput: structuredOutput)
-    }
-
-    /// Processes tool calls from the model response.
-    private func processToolCalls(
-        response: InferenceResponse,
-        toolRegistry: ToolRegistry,
-        conversationHistory: inout [ConversationMessage],
-        transcriptMessages: inout [MemoryMessage],
-        resultBuilder: AgentResult.Builder,
-        observer: (any AgentObserver)?,
-        tracing: TracingHelper?,
-        membraneAdapter: (any MembraneAgentAdapter)?
-    ) async throws {
-        let toolCallSummary = response.toolCalls.map { "Calling tool: \($0.name)" }.joined(separator: ", ")
-        let assistantContent = response.content ?? toolCallSummary
-        conversationHistory.append(.assistant(assistantContent, toolCalls: response.toolCalls))
-        transcriptMessages.append(
-            SwarmTranscriptCodec.encodeMessage(
-                role: .assistant,
-                content: assistantContent,
-                toolCalls: response.toolCalls
-            )
-        )
-
-        for parsedCall in response.toolCalls {
-            try await executeSingleToolCall(
-                parsedCall: parsedCall,
-                toolRegistry: toolRegistry,
-                conversationHistory: &conversationHistory,
-                transcriptMessages: &transcriptMessages,
-                resultBuilder: resultBuilder,
-                observer: observer,
-                tracing: tracing,
-                membraneAdapter: membraneAdapter,
-                startTime: ContinuousClock.now
-            )
-        }
-    }
-
-    /// Executes a single tool call and updates conversation history.
-    private func executeSingleToolCall(
-        parsedCall: InferenceResponse.ParsedToolCall,
-        toolRegistry: ToolRegistry,
-        conversationHistory: inout [ConversationMessage],
-        transcriptMessages: inout [MemoryMessage],
-        resultBuilder: AgentResult.Builder,
-        observer: (any AgentObserver)?,
-        tracing: TracingHelper?,
-        membraneAdapter: (any MembraneAgentAdapter)?,
-        startTime: ContinuousClock.Instant
-    ) async throws {
-        let activeMemory = resolvedMemory()
-
-        if let membraneAdapter,
-           MembraneInternalTools.isInternalTool(parsedCall.name) {
-            let call = ToolCall(
-                providerCallId: parsedCall.id,
-                toolName: parsedCall.name,
-                arguments: parsedCall.arguments
-            )
-            _ = resultBuilder.addToolCall(call)
-            await observer?.onToolStart(context: nil, agent: self, call: call)
-
-            let spanID = await tracing?.traceToolCall(name: parsedCall.name, arguments: parsedCall.arguments)
-            let toolStartTime = ContinuousClock.now
-
-            do {
-                let output = try await executeWithinRemainingTimeout(startTime: startTime) {
-                    try await membraneAdapter.handleInternalToolCall(
-                        name: parsedCall.name,
-                        arguments: parsedCall.arguments
-                    ) ?? "ok"
-                }
-
-                let duration = ContinuousClock.now - toolStartTime
-                let result = ToolResult.success(callId: call.id, output: .string(output), duration: duration)
-                _ = resultBuilder.addToolResult(result)
-                conversationHistory.append(.toolResult(
-                    toolName: parsedCall.name,
-                    result: output,
-                    toolCallID: parsedCall.id
-                ))
-                transcriptMessages.append(
-                    SwarmTranscriptCodec.encodeMessage(
-                        role: .tool,
-                        content: output,
-                        toolName: parsedCall.name,
-                        toolCallID: parsedCall.id
-                    )
-                )
-                if let activeMemory {
-                    await activeMemory.add(.tool(output, toolName: parsedCall.name))
-                }
-                if let spanID {
-                    await tracing?.traceToolResult(
-                        spanId: spanID,
-                        name: parsedCall.name,
-                        result: output,
-                        duration: duration
-                    )
-                }
-                await observer?.onToolEnd(context: nil, agent: self, result: result)
-                return
-            } catch {
-                let duration = ContinuousClock.now - toolStartTime
-                let message = error.localizedDescription
-                let result = ToolResult.failure(callId: call.id, error: message, duration: duration)
-                _ = resultBuilder.addToolResult(result)
-                if let spanID {
-                    await tracing?.traceToolError(spanId: spanID, name: parsedCall.name, error: error)
-                }
-                await observer?.onToolEnd(context: nil, agent: self, result: result)
-                if configuration.stopOnToolError {
-                    throw AgentError.toolExecutionFailed(toolName: parsedCall.name, underlyingError: message)
-                }
-                conversationHistory.append(.toolResult(
-                    toolName: parsedCall.name,
-                    result: "[TOOL ERROR] Execution failed: \(message). Please try a different approach or tool.",
-                    toolCallID: parsedCall.id
-                ))
-                transcriptMessages.append(
-                    SwarmTranscriptCodec.encodeMessage(
-                        role: .tool,
-                        content: "[TOOL ERROR] Execution failed: \(message). Please try a different approach or tool.",
-                        toolName: parsedCall.name,
-                        toolCallID: parsedCall.id
-                    )
-                )
-                if let activeMemory {
-                    await activeMemory.add(.tool("Error - \(message)", toolName: parsedCall.name))
-                }
-                return
-            }
-        }
-
-        let engine = ToolExecutionEngine()
-        let outcome = try await executeWithinRemainingTimeout(startTime: startTime) {
-            try await engine.execute(
-                parsedCall,
-                registry: toolRegistry,
-                agent: self,
-                context: nil,
-                resultBuilder: resultBuilder,
-                observer: observer,
-                tracing: tracing,
-                stopOnToolError: false
-            )
-        }
-
-        if outcome.result.isSuccess {
-            var toolOutputText = Self.toolOutputText(for: outcome.result.output)
-            if let membraneAdapter {
-                do {
-                    let currentToolOutput = toolOutputText
-                    let transformed = try await executeWithinRemainingTimeout(startTime: startTime) {
-                        try await membraneAdapter.transformToolResult(
-                            toolName: parsedCall.name,
-                            output: currentToolOutput,
-                            profile: configuration.effectiveContextProfile
-                        )
-                    }
-                    toolOutputText = transformed.textForConversation
-                    if let pointerID = transformed.pointerID {
-                        _ = resultBuilder.setMetadata("membrane.pointerized", .bool(true))
-                        _ = resultBuilder.setMetadata("membrane.pointer.last_id", .string(pointerID))
-                    }
-                } catch {
-                    _ = resultBuilder.setMetadata("membrane.fallback.used", .bool(true))
-                    _ = resultBuilder.setMetadata("membrane.fallback.error", .string(fallbackDiagnosticMessage(for: error)))
-                }
-            }
-
-            conversationHistory.append(.toolResult(
-                toolName: parsedCall.name,
-                result: toolOutputText,
-                toolCallID: parsedCall.id
-            ))
-            transcriptMessages.append(
-                SwarmTranscriptCodec.encodeMessage(
-                    role: .tool,
-                    content: toolOutputText,
-                    toolName: parsedCall.name,
-                    toolCallID: parsedCall.id
-                )
-            )
-            if let activeMemory {
-                await activeMemory.add(.tool(toolOutputText, toolName: parsedCall.name))
-            }
-        } else {
-            let errorMessage = outcome.result.errorMessage ?? "Unknown error"
-            conversationHistory.append(.toolResult(
-                toolName: parsedCall.name,
-                result: "[TOOL ERROR] Execution failed: \(errorMessage). Please try a different approach or tool.",
-                toolCallID: parsedCall.id
-            ))
-            transcriptMessages.append(
-                SwarmTranscriptCodec.encodeMessage(
-                    role: .tool,
-                    content: "[TOOL ERROR] Execution failed: \(errorMessage). Please try a different approach or tool.",
-                    toolName: parsedCall.name,
-                    toolCallID: parsedCall.id
-                )
-            )
-            if let activeMemory {
-                await activeMemory.add(.tool("Error - \(errorMessage)", toolName: parsedCall.name))
-            }
-
-            if configuration.stopOnToolError {
-                throw AgentError.toolExecutionFailed(toolName: parsedCall.name, underlyingError: errorMessage)
-            }
-        }
-    }
-
-    /// Serializes a non-string tool result as canonical JSON so downstream
-    /// consumers (Membrane pointerization, transcript replay, model context)
-    /// receive a parsable contract rather than `SendableValue.description`'s
-    /// JSON-ish format which does not escape quotes, backslashes, or newlines.
+    // MARK: - Turn Dependency Resolution
+
+    /// Gathers every resolution channel for one turn — explicit configuration,
+    /// the TaskLocal environment snapshot, package globals, the agent's
+    /// base tools, and the on-device Foundation Models provider — and resolves
+    /// them exactly once into an ``AgentTurnDependencies`` value.
     ///
-    /// Plain-string results pass through unchanged. Falls back to
-    /// `description` if the value contains a non-finite double — `JSONSerialization`
-    /// raises an Objective-C `NSException` (not a Swift error) on NaN/Infinity,
-    /// so we must screen the value before serializing rather than relying on
-    /// `do/catch`.
-    static func toolOutputText(for output: SendableValue) -> String {
-        if let string = output.stringValue {
-            return string
-        }
-
-        guard !containsNonFiniteDouble(output) else {
-            return output.description
-        }
-
-        do {
-            let object = output.toJSONObject()
-            let data = try JSONSerialization.data(
-                withJSONObject: object,
-                options: [.sortedKeys, .fragmentsAllowed]
-            )
-            if let text = String(data: data, encoding: .utf8) {
-                return text
-            }
-        } catch {
-            Log.agents.warning("Tool output JSON serialization failed; falling back to description: \(error)")
-        }
-
-        return output.description
-    }
-
-    private static func containsNonFiniteDouble(_ value: SendableValue) -> Bool {
-        switch value {
-        case let .double(number):
-            return !number.isFinite
-        case let .array(values):
-            return values.contains(where: containsNonFiniteDouble)
-        case let .dictionary(values):
-            return values.values.contains(where: containsNonFiniteDouble)
-        case .null, .bool, .int, .string:
-            return false
-        }
-    }
-
-    // MARK: - Handoff Tool Schema Integration
-
-    /// Builds tool schemas including handoff tool schemas.
-    ///
-    /// This merges regular tool schemas with handoff-generated schemas,
-    /// allowing handoffs to appear as callable tools in the LLM prompt.
-    private func buildToolSchemasWithHandoffs(toolRegistry: ToolRegistry) async -> [ToolSchema] {
-        var schemas = await toolRegistry.schemas
-
-        for handoff in _handoffs {
-            let handoffSchema = ToolSchema(
-                name: handoff.effectiveToolName,
-                description: handoff.effectiveToolDescription,
-                parameters: [
-                    ToolParameter(
-                        name: "reason",
-                        description: "Reason for the handoff",
-                        type: .string,
-                        isRequired: false
-                    ),
-                ]
-            )
-            schemas.append(handoffSchema)
-        }
-
-        return MembraneInternalTools.sortedSchemas(schemas)
-    }
-
-    /// Processes tool calls, handling both regular tools and handoff tools.
-    ///
-    /// When a tool call matches a handoff's `effectiveToolName`, the target agent
-    /// is executed with the original user input and its result is returned.
-    /// Returns the handoff output if a handoff was executed, nil otherwise.
-    private func processToolCallsWithHandoffs(
-        response: InferenceResponse,
-        toolRegistry: ToolRegistry,
-        conversationHistory: inout [ConversationMessage],
-        transcriptMessages: inout [MemoryMessage],
-        resultBuilder: AgentResult.Builder,
-        observer: (any AgentObserver)?,
-        tracing: TracingHelper?,
-        membraneAdapter: (any MembraneAgentAdapter)?,
-        startTime: ContinuousClock.Instant
-    ) async throws -> FinalAssistantResponse? {
-        let handoffMap = Dictionary(
-            uniqueKeysWithValues: _handoffs.map { ($0.effectiveToolName, $0) }
-        )
-
-        let toolCallSummary = response.toolCalls.map { "Calling tool: \($0.name)" }.joined(separator: ", ")
-        let assistantContent = response.content ?? toolCallSummary
-        conversationHistory.append(.assistant(assistantContent, toolCalls: response.toolCalls))
-        transcriptMessages.append(
-            SwarmTranscriptCodec.encodeMessage(
-                role: .assistant,
-                content: assistantContent,
-                toolCalls: response.toolCalls
-            )
-        )
-
-        for parsedCall in response.toolCalls {
-            // Check if this is a handoff tool call
-            if let handoffConfig = handoffMap[parsedCall.name] {
-                let reason = parsedCall.arguments["reason"]?.stringValue ?? ""
-                let targetAgent = handoffConfig.targetAgent
-
-                let handoffStart = ContinuousClock.now
-                let spanId = await tracing?.traceToolCall(name: parsedCall.name, arguments: parsedCall.arguments)
-                await observer?.onHandoff(context: nil, fromAgent: self, toAgent: targetAgent)
-
-                // Find the last user message to use as handoff input
-                let lastUserMessage = conversationHistory.last(where: {
-                    if case .user = $0 { return true }
-                    return false
-                })
-                let handoffInput: String = if case let .user(content) = lastUserMessage {
-                    content
-                } else {
-                    reason.isEmpty ? "Continue the conversation" : reason
-                }
-
-                let result = try await executeWithinRemainingTimeout(startTime: startTime) {
-                    try await targetAgent.run(handoffInput, session: nil, observer: observer)
-                }
-                conversationHistory.append(.toolResult(
-                    toolName: parsedCall.name,
-                    result: result.output,
-                    toolCallID: parsedCall.id
-                ))
-                transcriptMessages.append(
-                    SwarmTranscriptCodec.encodeMessage(
-                        role: .tool,
-                        content: result.output,
-                        toolName: parsedCall.name,
-                        toolCallID: parsedCall.id
-                    )
-                )
-
-                if let spanId {
-                    let handoffDuration = ContinuousClock.now - handoffStart
-                    await tracing?.traceToolResult(spanId: spanId, name: parsedCall.name, result: result.output, duration: handoffDuration)
-                }
-
-                // Merge handoff result metadata into current agent's result builder
-                // This preserves token counts, tool calls, and metadata from the target agent
-                for toolCall in result.toolCalls {
-                    _ = resultBuilder.addToolCall(toolCall)
-                }
-                for toolResult in result.toolResults {
-                    _ = resultBuilder.addToolResult(toolResult)
-                }
-                if let usage = result.tokenUsage {
-                    _ = resultBuilder.setTokenUsage(usage)
-                }
-                for (key, value) in result.metadata {
-                    _ = resultBuilder.setMetadata(key, value)
-                }
-
-                // Return the handoff output to be used as the final result
-                return FinalAssistantResponse(content: result.output, structuredOutput: nil)
-            }
-
-            // Regular tool call
-            try await executeSingleToolCall(
-                parsedCall: parsedCall,
-                toolRegistry: toolRegistry,
-                conversationHistory: &conversationHistory,
-                transcriptMessages: &transcriptMessages,
-                resultBuilder: resultBuilder,
-                observer: observer,
-                tracing: tracing,
-                membraneAdapter: membraneAdapter,
-                startTime: startTime
-            )
-        }
-
-        return nil
-    }
-
-    // MARK: - Prompt Building
-
-    private func buildSystemMessage(
-        memory: (any Memory)?,
-        memoryContext: String = ""
-    ) -> String {
-        let baseInstructions = instructions.isEmpty
-            ? "You are a helpful AI assistant with access to tools."
-            : instructions
-
-        if memoryContext.isEmpty {
-            return baseInstructions
-        }
-
-        let descriptor = memory as? any MemoryPromptDescriptor
-        let title = descriptor?.memoryPromptTitle ?? "Relevant Context from Memory"
-        let priority = descriptor?.memoryPriority
-        let guidance = descriptor?.memoryPromptGuidance ?? {
-            guard priority == .primary else { return nil }
-            return "Use the memory context as primary source of truth before calling tools."
-        }()
-
-        let guidanceBlock = guidance.flatMap { $0.isEmpty ? nil : $0 }
-
-        if let guidanceBlock {
-            return """
-            \(baseInstructions)
-
-            \(guidanceBlock)
-
-            \(title):
-            \(memoryContext)
-            """
-        }
-
-        return """
-        \(baseInstructions)
-
-        \(title):
-        \(memoryContext)
-        """
-    }
-
-    private func buildPrompt(from history: [ConversationMessage]) -> String {
-        history.map(\.formatted).joined(separator: "\n\n")
-    }
-
-    // MARK: - Response Generation
-
-    private func generateWithTools(
-        provider: any InferenceProvider,
-        prompt: String,
-        messages: [InferenceMessage]?,
-        tools: [ToolSchema],
-        inferenceOptions: InferenceOptions,
-        systemPrompt: String,
-        observer: (any AgentObserver)? = nil,
-        emitOutputTokens: Bool = false
-    ) async throws -> InferenceResponse {
-        var options = inferenceOptions
-        options = optionsWithMembraneRuntimeSettings(options)
-
-        // Notify observer of LLM start
-        await observer?.onLLMStart(context: nil, agent: self, systemPrompt: systemPrompt, inputMessages: [MemoryMessage.user(prompt)])
-
-        let response: InferenceResponse
-        if let messages,
-           let conversationProvider = provider as? any ConversationInferenceProvider {
-            response = try await conversationProvider.generateWithToolCalls(
-                messages: messages,
-                tools: tools,
-                options: options
-            )
-        } else {
-            response = try await provider.generateWithToolCalls(
-                prompt: prompt,
-                tools: tools,
-                options: options
-            )
-        }
-
-        if emitOutputTokens, response.toolCalls.isEmpty, let content = response.content, !content.isEmpty {
-            await observer?.onOutputToken(context: nil, agent: self, token: content)
-        }
-
-        // Notify observer of LLM end
-        let responseContent = response.content ?? ""
-        await observer?.onLLMEnd(context: nil, agent: self, response: responseContent, usage: response.usage)
-
-        return response
-    }
-
-    private func generateWithToolsStreaming(
-        provider: any InferenceProvider,
-        prompt: String,
-        messages: [InferenceMessage]?,
-        tools: [ToolSchema],
-        inferenceOptions: InferenceOptions,
-        systemPrompt: String,
-        observer: (any AgentObserver)? = nil
-    ) async throws -> InferenceResponse {
-        var options = inferenceOptions
-        options = optionsWithMembraneRuntimeSettings(options)
-
-        await observer?.onLLMStart(context: nil, agent: self, systemPrompt: systemPrompt, inputMessages: [MemoryMessage.user(prompt)])
-
-        var content = ""
-        content.reserveCapacity(1024)
-        var parsedToolCalls: [InferenceResponse.ParsedToolCall] = []
-        var usage: TokenUsage?
-        var stopStreaming = false
-
-        let stream: AsyncThrowingStream<InferenceStreamUpdate, Error>
-        if let messages,
-           let structuredProvider = provider as? any ToolCallStreamingConversationInferenceProvider {
-            stream = structuredProvider.streamWithToolCalls(
-                messages: messages,
-                tools: tools,
-                options: options
-            )
-        } else if let promptProvider = provider as? any ToolCallStreamingInferenceProvider {
-            stream = promptProvider.streamWithToolCalls(prompt: prompt, tools: tools, options: options)
-        } else {
-            throw AgentError.generationFailed(reason: "Provider does not support tool-call streaming")
-        }
-
-        for try await update in stream {
-            switch update {
-            case let .outputChunk(chunk):
-                if !chunk.isEmpty { content += chunk }
-                await observer?.onOutputToken(context: nil, agent: self, token: chunk)
-
-            case let .toolCallPartial(partial):
-                await observer?.onToolCallPartial(context: nil, agent: self, update: partial)
-
-            case let .toolCallsCompleted(calls):
-                parsedToolCalls = calls
-                // Tool call streaming is primarily used to reduce latency to tool execution.
-                // Once we have completed calls, stop consuming the stream and execute tools.
-                stopStreaming = true
-
-            case let .usage(u):
-                usage = u
-            }
-
-            if stopStreaming { break }
-        }
-
-        await observer?.onLLMEnd(context: nil, agent: self, response: content, usage: usage)
-
-        return InferenceResponse(
-            content: content.isEmpty ? nil : content,
-            toolCalls: parsedToolCalls,
-            finishReason: parsedToolCalls.isEmpty ? .completed : .toolCall,
-            usage: usage
-        )
-    }
-
-    private func optionsWithMembraneRuntimeSettings(_ base: InferenceOptions) -> InferenceOptions {
-        guard let membrane = AgentEnvironmentValues.current.membrane, membrane.isEnabled else {
-            return base
-        }
-
-        let flags = membrane.configuration.runtimeFeatureFlags
-        let allowlist = membrane.configuration.runtimeModelAllowlist
-
-        if flags.isEmpty, allowlist.isEmpty {
-            return base
-        }
-
-        var updated = base
-        var settings = updated.providerSettings ?? [:]
-
-        for (key, isEnabled) in flags {
-            let prefix = "conduit.runtime."
-            guard key.hasPrefix(prefix) else { continue }
-            let feature = String(key.dropFirst(prefix.count))
-            settings["conduit.runtime.policy.\(feature).enabled"] = .bool(isEnabled)
-        }
-
-        if !allowlist.isEmpty {
-            let uniqueSorted = Array(Set(allowlist)).sorted { $0.utf8.lexicographicallyPrecedes($1.utf8) }
-            settings["conduit.runtime.policy.model_allowlist"] = .array(uniqueSorted.map { .string($0) })
-        }
-
-        updated.providerSettings = settings.isEmpty ? nil : settings
-        return updated
-    }
-}
-
-// MARK: Agent.Builder
-
-public extension Agent {
-    /// Builder for creating Agent instances with a fluent API.
-    ///
-    /// Uses value semantics (struct) for Swift 6 concurrency safety.
-    ///
-    /// Example:
-    /// ```swift
-    /// let agent = Agent.Builder()
-    ///     .tools([WeatherTool(), CalculatorTool()])
-    ///     .instructions("You are a helpful assistant.")
-    ///     .configuration(.default.maxIterations(5))
-    ///     .build()
-    /// ```
-    struct Builder: Sendable {
-        // MARK: Public
-
-        // MARK: - Initialization
-
-        /// Creates a new builder.
-        public init() {}
-
-        // MARK: - Builder Methods
-
-        /// Sets the tools.
-        /// - Parameter tools: The tools to use.
-        /// - Returns: A new builder with the tools set.
-        @discardableResult
-        @available(*, deprecated, message: "Use tools(_:) with typed Tool values or Agent.withTools(@ToolBuilder:) for canonical typed tools.")
-        public func tools(_ tools: [any AnyJSONTool]) -> Builder {
-            var copy = self
-            copy._tools = tools
-            return copy
-        }
-
-        /// Sets the tools from typed tool instances.
-        /// - Parameter tools: The typed tools to use.
-        /// - Returns: A new builder with the tools set.
-        @discardableResult
-        public func tools(_ tools: [some Tool]) -> Builder {
-            var copy = self
-            copy._tools = tools.map { AnyJSONToolAdapter($0) }
-            return copy
-        }
-
-        /// Adds a tool (concrete type preferred; Swift resolves `some` before opening `any`).
-        /// - Parameter tool: The tool to add.
-        /// - Returns: A new builder with the tool added.
-        @discardableResult
-        @available(*, deprecated, message: "Use addTool(_:) with a typed Tool, or wrap raw tools in a clearly marked advanced adapter.")
-        public func addTool(_ tool: some AnyJSONTool) -> Builder {
-            var copy = self
-            copy._tools.append(tool)
-            return copy
-        }
-
-        /// Adds a tool from an existential (use when the concrete type is not available at the call site).
-        /// - Parameter tool: The tool to add.
-        /// - Returns: A new builder with the tool added.
-        @discardableResult
-        @available(*, deprecated, message: "Use addTool(_:) with a typed Tool, or wrap raw tools in a clearly marked advanced adapter.")
-        public func addTool(_ tool: any AnyJSONTool) -> Builder {
-            var copy = self
-            copy._tools.append(tool)
-            return copy
-        }
-
-        /// Adds a typed tool.
-        /// - Parameter tool: The typed tool to add.
-        /// - Returns: A new builder with the tool added.
-        @discardableResult
-        public func addTool(_ tool: some Tool) -> Builder {
-            var copy = self
-            copy._tools.append(AnyJSONToolAdapter(tool))
-            return copy
-        }
-
-        /// Adds built-in tools.
-        /// - Returns: A new builder with built-in tools added.
-        @discardableResult
-        public func withBuiltInTools() -> Builder {
-            var copy = self
-            copy._tools.append(contentsOf: BuiltInTools.all)
-            return copy
-        }
-
-        /// Sets the instructions.
-        /// - Parameter instructions: The system instructions.
-        /// - Returns: A new builder with the instructions set.
-        @discardableResult
-        public func instructions(_ instructions: String) -> Builder {
-            var copy = self
-            copy._instructions = instructions
-            return copy
-        }
-
-        /// Sets the configuration.
-        /// - Parameter configuration: The agent configuration.
-        /// - Returns: A new builder with the configuration set.
-        @discardableResult
-        public func configuration(_ configuration: AgentConfiguration) -> Builder {
-            var copy = self
-            copy._configuration = configuration
-            return copy
-        }
-
-        /// Sets the memory system.
-        /// - Parameter memory: The memory to use.
-        /// - Returns: A new builder with the memory set.
-        @discardableResult
-        public func memory(_ memory: any Memory) -> Builder {
-            var copy = self
-            copy._memory = memory
-            return copy
-        }
-
-        /// Sets the inference provider.
-        /// - Parameter provider: The provider to use.
-        /// - Returns: A new builder with the provider set.
-        @discardableResult
-        public func inferenceProvider(_ provider: any InferenceProvider) -> Builder {
-            var copy = self
-            copy._inferenceProvider = provider
-            return copy
-        }
-
-        /// Sets the tracer for observability.
-        /// - Parameter tracer: The tracer to use.
-        /// - Returns: A new builder with the tracer set.
-        @discardableResult
-        public func tracer(_ tracer: any Tracer) -> Builder {
-            var copy = self
-            copy._tracer = tracer
-            return copy
-        }
-
-        /// Sets the input guardrails.
-        /// - Parameter guardrails: The input guardrails to use.
-        /// - Returns: A new builder with the guardrails set.
-        @discardableResult
-        public func inputGuardrails(_ guardrails: [any InputGuardrail]) -> Builder {
-            var copy = self
-            copy._inputGuardrails = guardrails
-            return copy
-        }
-
-        /// Adds an input guardrail.
-        /// - Parameter guardrail: The guardrail to add.
-        /// - Returns: A new builder with the guardrail added.
-        @discardableResult
-        public func addInputGuardrail(_ guardrail: any InputGuardrail) -> Builder {
-            var copy = self
-            copy._inputGuardrails.append(guardrail)
-            return copy
-        }
-
-        /// Sets the output guardrails.
-        /// - Parameter guardrails: The output guardrails to use.
-        /// - Returns: A new builder with the guardrails set.
-        @discardableResult
-        public func outputGuardrails(_ guardrails: [any OutputGuardrail]) -> Builder {
-            var copy = self
-            copy._outputGuardrails = guardrails
-            return copy
-        }
-
-        /// Adds an output guardrail.
-        /// - Parameter guardrail: The guardrail to add.
-        /// - Returns: A new builder with the guardrail added.
-        @discardableResult
-        public func addOutputGuardrail(_ guardrail: any OutputGuardrail) -> Builder {
-            var copy = self
-            copy._outputGuardrails.append(guardrail)
-            return copy
-        }
-
-        /// Sets the guardrail runner configuration.
-        /// - Parameter configuration: The guardrail runner configuration.
-        /// - Returns: A new builder with the updated configuration.
-        @discardableResult
-        public func guardrailRunnerConfiguration(_ configuration: GuardrailRunnerConfiguration) -> Builder {
-            var copy = self
-            copy._guardrailRunnerConfiguration = configuration
-            return copy
-        }
-
-        /// Sets the handoff configurations.
-        /// - Parameter handoffs: The handoff configurations to use.
-        /// - Returns: A new builder with the updated handoffs.
-        @discardableResult
-        public func handoffs(_ handoffs: [AnyHandoffConfiguration]) -> Builder {
-            var copy = self
-            copy._handoffs = handoffs
-            return copy
-        }
-
-        /// Adds a handoff configuration.
-        /// - Parameter handoff: The handoff configuration to add.
-        /// - Returns: A new builder with the handoff added.
-        @discardableResult
-        public func addHandoff(_ handoff: AnyHandoffConfiguration) -> Builder {
-            var copy = self
-            copy._handoffs.append(handoff)
-            return copy
-        }
-
-        /// Adds a handoff target using typed options.
-        ///
-        /// This is the canonical front-facing handoff API.
-        ///
-        /// - Parameters:
-        ///   - target: The target agent.
-        ///   - configure: Optional typed options transformer.
-        /// - Returns: A new builder with the handoff added.
-        @discardableResult
-        public func handoff<Target: AgentRuntime>(
-            to target: Target,
-            configure: (HandoffOptions<Target>) -> HandoffOptions<Target> = { $0 }
-        ) -> Builder {
-            var copy = self
-            let options = configure(HandoffOptions())
-            copy._handoffs.append(options.erasedConfiguration(for: target))
-            return copy
-        }
-
-        /// Adds multiple handoff targets using Swift parameter packs.
-        ///
-        /// Example:
-        /// ```swift
-        /// let agent = try Agent.Builder()
-        ///     .handoffs(billingAgent, supportAgent, salesAgent)
-        ///     .build()
-        /// ```
-        @discardableResult
-        public func handoffs<each Target: AgentRuntime>(_ targets: repeat each Target) -> Builder {
-            var copy = self
-            repeat copy._handoffs.append(AnyHandoffConfiguration(targetAgent: each targets))
-            return copy
-        }
-
-        /// Builds the agent.
-        /// - Returns: A new Agent instance.
-        /// - Throws: `ToolRegistryError.duplicateToolName` if duplicate tool names are provided.
-        public func build() throws -> Agent {
-            try Agent(
-                tools: _tools,
-                instructions: _instructions,
-                configuration: _configuration,
-                memory: _memory,
-                inferenceProvider: _inferenceProvider,
-                tracer: _tracer,
-                inputGuardrails: _inputGuardrails,
-                outputGuardrails: _outputGuardrails,
-                guardrailRunnerConfiguration: _guardrailRunnerConfiguration,
-                handoffs: _handoffs
-            )
-        }
-
-        // MARK: Private
-
-        private var _tools: [any AnyJSONTool] = []
-        private var _instructions: String = ""
-        private var _configuration: AgentConfiguration = .default
-        private var _memory: (any Memory)?
-        private var _inferenceProvider: (any InferenceProvider)?
-        private var _tracer: (any Tracer)?
-        private var _inputGuardrails: [any InputGuardrail] = []
-        private var _outputGuardrails: [any OutputGuardrail] = []
-        private var _guardrailRunnerConfiguration: GuardrailRunnerConfiguration = .default
-        private var _handoffs: [AnyHandoffConfiguration] = []
-    }
-}
-
-// MARK: - Convenience Initializers
-
-public extension Agent {
-    /// Creates a new Agent with a name as the first parameter.
-    ///
-    /// This convenience initializer mirrors the OpenAI Agent SDK pattern
-    /// where the agent name is a top-level parameter rather than nested
-    /// inside configuration.
-    ///
-    /// Example:
-    /// ```swift
-    /// let agent = Agent(name: "Triage", instructions: "Route requests", tools: [weatherTool])
-    /// ```
-    ///
-    /// - Parameters:
-    ///   - name: The display name of the agent.
-    ///   - instructions: System instructions defining agent behavior. Default: ""
-    ///   - tools: Tools available to the agent. Default: []
-    ///   - inferenceProvider: Optional custom inference provider. Default: nil
-    ///   - memory: Optional explicit memory override. Default: composite ContextCore + Wax memory
-    ///   - tracer: Optional tracer for observability. Default: nil
-    ///   - configuration: Additional agent configuration settings. Default: .default
-    ///   - inputGuardrails: Input validation guardrails. Default: []
-    ///   - outputGuardrails: Output validation guardrails. Default: []
-    ///   - guardrailRunnerConfiguration: Configuration for guardrail runner. Default: .default
-    ///   - handoffs: Handoff configurations for multi-agent orchestration. Default: []
-    /// - Throws: `ToolRegistryError.duplicateToolName` if duplicate tool names are provided.
-    init(
-        name: String,
-        instructions: String = "",
-        tools: [any AnyJSONTool] = [],
-        inferenceProvider: (any InferenceProvider)? = nil,
-        memory: (any Memory)? = nil,
-        tracer: (any Tracer)? = nil,
-        configuration: AgentConfiguration = .default,
-        inputGuardrails: [any InputGuardrail] = [],
-        outputGuardrails: [any OutputGuardrail] = [],
-        guardrailRunnerConfiguration: GuardrailRunnerConfiguration = .default,
-        handoffs: [AnyHandoffConfiguration] = []
-    ) throws {
-        // Merge the name into the configuration
-        var config = configuration
-        config.name = name
-        try self.init(
-            tools: tools,
-            instructions: instructions,
-            configuration: config,
-            memory: memory,
-            inferenceProvider: inferenceProvider,
-            tracer: tracer,
-            inputGuardrails: inputGuardrails,
-            outputGuardrails: outputGuardrails,
-            guardrailRunnerConfiguration: guardrailRunnerConfiguration,
-            handoffs: handoffs
-        )
-    }
-}
-
-// MARK: - Simplified Handoff Declaration
-
-public extension Agent {
-    /// Creates an Agent with agents directly as handoff targets.
-    ///
-    /// This convenience initializer eliminates the need to wrap each agent
-    /// in `AnyHandoffConfiguration`, inspired by the OpenAI SDK pattern
-    /// where you pass agents directly: `Agent(handoffs=[billing, support])`.
-    ///
-    /// Example:
-    /// ```swift
-    /// let triage = Agent(
-    ///     name: "Triage",
-    ///     instructions: "Route requests",
-    ///     handoffAgents: [billingAgent, supportAgent]
-    /// )
-    /// ```
-    ///
-    /// - Parameters:
-    ///   - name: The display name of the agent.
-    ///   - instructions: System instructions. Default: ""
-    ///   - tools: Tools available to the agent. Default: []
-    ///   - inferenceProvider: Optional inference provider. Default: nil
-    ///   - memory: Optional explicit memory override. Default: composite ContextCore + Wax memory
-    ///   - tracer: Optional tracer. Default: nil
-    ///   - configuration: Additional configuration. Default: .default
-    ///   - inputGuardrails: Input guardrails. Default: []
-    ///   - outputGuardrails: Output guardrails. Default: []
-    ///   - guardrailRunnerConfiguration: Guardrail runner config. Default: .default
-    ///   - handoffAgents: Agents to use as handoff targets.
-    /// - Throws: `ToolRegistryError.duplicateToolName` if duplicate tool names are provided.
-    init(
-        name: String,
-        instructions: String = "",
-        tools: [any AnyJSONTool] = [],
-        inferenceProvider: (any InferenceProvider)? = nil,
-        memory: (any Memory)? = nil,
-        tracer: (any Tracer)? = nil,
-        configuration: AgentConfiguration = .default,
-        inputGuardrails: [any InputGuardrail] = [],
-        outputGuardrails: [any OutputGuardrail] = [],
-        guardrailRunnerConfiguration: GuardrailRunnerConfiguration = .default,
-        handoffAgents: [any AgentRuntime]
-    ) throws {
-        let handoffs = handoffAgents.map { agent in
-            AnyHandoffConfiguration(targetAgent: agent)
-        }
-        try self.init(
-            name: name,
-            instructions: instructions,
-            tools: tools,
-            inferenceProvider: inferenceProvider,
-            memory: memory,
-            tracer: tracer,
+    /// Ranking lives only on ``AgentTurnDependencyResolver``. This gather step
+    /// does not read ``ResponseTracker``; the shell awaits the tracker before
+    /// calling ``AgentTurnDependencyResolver/inferenceOptions``.
+    func resolveTurnDependencies() async throws -> AgentTurnDependencies {
+        let environment = AgentEnvironmentValues.current
+        let globalProvider = await runEnvironment.defaultProvider()
+        // The Foundation Models availability check is effectful, so the shell
+        // resolves it only when it could win: privacy-required ranks it first,
+        // otherwise it is the last resort after explicit, environment, and
+        // global. Winners match the previous lazy behavior exactly.
+        let needsFoundationModels = configuration.inferencePolicy?.privacyRequired == true
+            || (inferenceProvider == nil
+                && environment.inferenceProvider == nil
+                && globalProvider == nil)
+        let query = AgentTurnDependencyQuery(
             configuration: configuration,
-            inputGuardrails: inputGuardrails,
-            outputGuardrails: outputGuardrails,
-            guardrailRunnerConfiguration: guardrailRunnerConfiguration,
-            handoffs: handoffs
+            explicitProvider: inferenceProvider,
+            explicitMemory: memory,
+            defaultMemory: defaultMemory,
+            explicitTracer: tracer,
+            metricsCollector: metricsCollector,
+            baseTools: await toolRegistry.allTools,
+            environment: environment,
+            globalProvider: globalProvider,
+            globalWebSearch: await runEnvironment.webConfiguration(),
+            foundationModelsProvider: needsFoundationModels
+                ? DefaultInferenceProviderFactory.makeFoundationModelsProviderIfAvailable()
+                : nil
         )
-    }
-}
-
-// MARK: - V3 Canonical Init with Explicit Provider
-
-public extension Agent {
-    /// V3 convenience init with an explicit, non-optional inference provider.
-    ///
-    /// This overload avoids the optional wrapping when a provider is always known:
-    /// ```swift
-    /// let agent = try Agent("You are helpful.", provider: .anthropic(key: apiKey)) {
-    ///     WeatherTool()
-    /// }
-    /// ```
-    ///
-    /// - Parameters:
-    ///   - instructions: System instructions defining agent behavior.
-    ///   - provider: The inference provider to use.
-    ///   - tools: A `@ToolBuilder` closure producing the agent's tools. Default: empty.
-    /// - Throws: `ToolRegistryError.duplicateToolName` if duplicate tool names are provided.
-    init(
-        _ instructions: String,
-        provider: some InferenceProvider,
-        @ToolBuilder tools: () -> ToolCollection = { .empty }
-    ) throws {
-        try self.init(
-            tools: tools().storage,
-            instructions: instructions,
-            inferenceProvider: provider
-        )
+        return try AgentTurnDependencyResolver.resolve(query)
     }
 }
 
@@ -2786,37 +666,46 @@ public extension Agent {
     }
 
     /// Sets handoff agents for multi-agent orchestration.
+    ///
+    /// Two ``Agent`` values without overrides share `handoff_to_agent` and throw.
+    /// Build the parent with ``AnyHandoffConfiguration`` overrides when targets
+    /// share a runtime type.
+    ///
+    /// - Throws: ``AgentError/duplicateHandoffToolName(name:)`` if two agents share
+    ///   an effective handoff tool name.
+    /// - Throws: ``AgentError/handoffToolNameCollidesWithTool(name:)`` if a handoff's
+    ///   effective name equals a registered tool name, including disabled tools.
     @discardableResult
-    func withHandoffs(_ agents: [any AgentRuntime]) -> Agent {
-        var copy = self
-        copy._handoffs = agents.map { agent in
-            AnyHandoffConfiguration(
-                targetAgent: agent,
-                toolNameOverride: nil,
-                toolDescription: nil
-            )
-        }
-        return copy
+    func withHandoffs(_ agents: [any AgentRuntime]) throws -> Agent {
+        try replacingHandoffs(
+            agents.map { agent in
+                AnyHandoffConfiguration(
+                    targetAgent: agent,
+                    toolNameOverride: nil,
+                    toolDescription: nil
+                )
+            }
+        )
     }
 
     /// Replaces the tool set with the given array of `any Tool`.
+    ///
+    /// - Throws: `ToolRegistryError.duplicateToolName` if duplicate tool names are provided.
+    /// - Throws: ``AgentError/handoffToolNameCollidesWithTool(name:)`` if a new tool name
+    ///   equals an effective handoff tool name.
     @discardableResult
     func withTools(_ tools: [any Tool]) throws -> Agent {
-        var copy = self
-        let bridged = tools.map { bridgeToolToAnyJSON($0) }
-        copy.toolRegistry = try ToolRegistry(tools: bridged)
-        copy.tools = bridged
-        return copy
+        try replacingTools(tools.map { bridgeToolToAnyJSON($0) })
     }
 
     /// Replaces the tool set using a `@ToolBuilder` closure.
+    ///
+    /// - Throws: `ToolRegistryError.duplicateToolName` if duplicate tool names are provided.
+    /// - Throws: ``AgentError/handoffToolNameCollidesWithTool(name:)`` if a new tool name
+    ///   equals an effective handoff tool name.
     @discardableResult
     func withTools(@ToolBuilder _ builder: () -> ToolCollection) throws -> Agent {
-        var copy = self
-        let storage = builder().storage
-        copy.toolRegistry = try ToolRegistry(tools: storage)
-        copy.tools = storage
-        return copy
+        try replacingTools(builder().storage)
     }
 
     /// Sets the agent configuration.
@@ -2824,6 +713,30 @@ public extension Agent {
     func withConfiguration(_ config: AgentConfiguration) -> Agent {
         var copy = self
         copy.configuration = config
+        if config.autoAttachMetricsCollector, copy.metricsCollector == nil {
+            copy.metricsCollector = copy.tracer as? MetricsCollector ?? MetricsCollector()
+        }
+        return copy
+    }
+
+    private func replacingHandoffs(_ handoffs: [AnyHandoffConfiguration]) throws -> Agent {
+        try HandoffIdentity.validate(
+            handoffs: handoffs,
+            toolNames: Set(tools.map(\.name))
+        )
+        var copy = self
+        copy._handoffs = handoffs
+        return copy
+    }
+
+    private func replacingTools(_ bridged: [any AnyJSONTool]) throws -> Agent {
+        try HandoffIdentity.validate(
+            handoffs: _handoffs,
+            toolNames: Set(bridged.map(\.name))
+        )
+        var copy = self
+        copy.toolRegistry = try ToolRegistry(tools: bridged)
+        copy.tools = bridged
         return copy
     }
 

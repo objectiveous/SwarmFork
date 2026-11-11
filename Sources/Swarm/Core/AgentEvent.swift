@@ -86,6 +86,14 @@ public enum AgentEvent: Sendable {
 
         /// A tool call failed.
         case failed(call: ToolCall, error: AgentError)
+
+        /// Builds ``completed(call:result:)`` from a paired invocation.
+        ///
+        /// The enum associated values stay `call` and `result`. Use this when
+        /// the observer already holds a ``ToolInvocation``.
+        public static func completed(_ invocation: ToolInvocation) -> Self {
+            .completed(call: invocation.call, result: invocation.result)
+        }
     }
 
     /// Token and thought output events.
@@ -146,6 +154,11 @@ public enum AgentEvent: Sendable {
 
         /// An LLM call completed with usage telemetry.
         case llmCompleted(model: String?, promptTokens: Int?, completionTokens: Int?, duration: TimeInterval)
+
+        /// Provider inference will be retried after a transient failure.
+        ///
+        /// `attempt` is 1-indexed (the first retry is `1`).
+        case inferenceRetry(attempt: Int, message: String)
     }
 
 }
@@ -202,11 +215,11 @@ public struct ToolCall: Sendable, Equatable, Identifiable, Codable {
     ///   - arguments: Arguments for the tool.
     ///   - timestamp: When the call was made. Default: now
     public init(
-        id: UUID = UUID(),
+        id: UUID = TurnEnvironment.live.newUUID(),
         providerCallId: String? = nil,
         toolName: String,
         arguments: [String: SendableValue] = [:],
-        timestamp: Date = Date()
+        timestamp: Date = TurnEnvironment.live.now()
     ) {
         self.id = id
         self.providerCallId = providerCallId
@@ -246,31 +259,84 @@ public struct ToolCall: Sendable, Equatable, Identifiable, Codable {
 
 /// Represents the result of a tool execution.
 ///
-/// A ToolResult captures the outcome of a tool invocation, including
-/// success/failure status, the output value, and timing information.
+/// `ToolResult` is a closed outcome: execution either succeeded with a value or
+/// failed with a message. `callId` and `duration` sit outside the outcome so
+/// timing and correlation stay available on both paths.
+///
+/// Construct values with ``success(callId:output:duration:)`` or
+/// ``failure(callId:error:duration:)``. Compatibility accessors
+/// (``isSuccess``, ``output``, ``errorMessage``) preserve the previous
+/// stored-property surface for observers, event streams, and tests.
+///
+/// | Outcome | ``isSuccess`` | ``output`` | ``errorMessage`` |
+/// |---------|---------------|------------|------------------|
+/// | ``Outcome/success(_:)`` | `true` | associated value | `nil` |
+/// | ``Outcome/failure(message:)`` | `false` | `.null` | associated message |
 public struct ToolResult: Sendable, Equatable, Codable {
+    /// Closed success-or-failure payload for a tool invocation.
+    public enum Outcome: Sendable, Equatable {
+        /// The tool returned a value.
+        case success(SendableValue)
+        /// The tool failed. `message` matches historical ``errorMessage`` semantics.
+        case failure(message: String)
+    }
+
     /// The tool call that produced this result.
     public let callId: UUID
-
-    /// Whether the tool execution was successful.
-    public let isSuccess: Bool
-
-    /// The output value from the tool.
-    public let output: SendableValue
 
     /// Duration of the tool execution.
     public let duration: Duration
 
-    /// Error message if the tool failed.
-    public let errorMessage: String?
+    /// Success value or failure message. Invalid combinations cannot be stored.
+    public let outcome: Outcome
 
-    /// Creates a new tool result.
-    /// - Parameters:
-    ///   - callId: The ID of the tool call.
-    ///   - isSuccess: Whether execution succeeded.
-    ///   - output: The output value.
-    ///   - duration: Execution duration.
-    ///   - errorMessage: Error message on failure.
+    /// Whether the tool execution was successful.
+    public var isSuccess: Bool {
+        switch outcome {
+        case .success:
+            true
+        case .failure:
+            false
+        }
+    }
+
+    /// The output value from the tool.
+    ///
+    /// On failure this is always ``SendableValue/null``.
+    public var output: SendableValue {
+        switch outcome {
+        case let .success(value):
+            value
+        case .failure:
+            .null
+        }
+    }
+
+    /// Error message if the tool failed.
+    public var errorMessage: String? {
+        switch outcome {
+        case .success:
+            nil
+        case let .failure(message):
+            message
+        }
+    }
+
+    /// Creates a result from a closed outcome.
+    ///
+    /// Prefer ``success(callId:output:duration:)`` or ``failure(callId:error:duration:)``.
+    public init(callId: UUID, duration: Duration, outcome: Outcome) {
+        self.callId = callId
+        self.duration = duration
+        self.outcome = outcome
+    }
+
+    /// Creates a new tool result from independently specified success flags.
+    ///
+    /// Prefer ``success(callId:output:duration:)`` or ``failure(callId:error:duration:)``.
+    /// A failure with a nil message is stored as `"Tool execution failed"`.
+    /// Success ignores `errorMessage`; failure ignores `output`.
+    @available(*, deprecated, message: "Use ToolResult.success(...) or .failure(callId:error:duration:)")
     public init(
         callId: UUID,
         isSuccess: Bool,
@@ -279,10 +345,12 @@ public struct ToolResult: Sendable, Equatable, Codable {
         errorMessage: String? = nil
     ) {
         self.callId = callId
-        self.isSuccess = isSuccess
-        self.output = output
         self.duration = duration
-        self.errorMessage = errorMessage
+        if isSuccess {
+            outcome = .success(output)
+        } else {
+            outcome = .failure(message: errorMessage ?? "Tool execution failed")
+        }
     }
 
     /// Creates a successful result.
@@ -292,7 +360,7 @@ public struct ToolResult: Sendable, Equatable, Codable {
     ///   - duration: Execution duration.
     /// - Returns: A successful ToolResult.
     public static func success(callId: UUID, output: SendableValue, duration: Duration) -> ToolResult {
-        ToolResult(callId: callId, isSuccess: true, output: output, duration: duration)
+        ToolResult(callId: callId, duration: duration, outcome: .success(output))
     }
 
     /// Creates a failed result.
@@ -302,7 +370,39 @@ public struct ToolResult: Sendable, Equatable, Codable {
     ///   - duration: Execution duration.
     /// - Returns: A failed ToolResult.
     public static func failure(callId: UUID, error: String, duration: Duration) -> ToolResult {
-        ToolResult(callId: callId, isSuccess: false, output: .null, duration: duration, errorMessage: error)
+        ToolResult(callId: callId, duration: duration, outcome: .failure(message: error))
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case callId
+        case isSuccess
+        case output
+        case duration
+        case errorMessage
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        callId = try container.decode(UUID.self, forKey: .callId)
+        duration = try container.decode(Duration.self, forKey: .duration)
+        let isSuccess = try container.decode(Bool.self, forKey: .isSuccess)
+        if isSuccess {
+            let output = try container.decode(SendableValue.self, forKey: .output)
+            outcome = .success(output)
+        } else {
+            let message = try container.decodeIfPresent(String.self, forKey: .errorMessage)
+                ?? "Tool execution failed"
+            outcome = .failure(message: message)
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(callId, forKey: .callId)
+        try container.encode(isSuccess, forKey: .isSuccess)
+        try container.encode(output, forKey: .output)
+        try container.encode(duration, forKey: .duration)
+        try container.encodeIfPresent(errorMessage, forKey: .errorMessage)
     }
 }
 
@@ -452,6 +552,8 @@ extension AgentEvent.Observation: Equatable {
             lM == rM && lP == rP
         case let (.llmCompleted(lM, lP, lC, lD), .llmCompleted(rM, rP, rC, rD)):
             lM == rM && lP == rP && lC == rC && lD == rD
+        case let (.inferenceRetry(lA, lM), .inferenceRetry(rA, rM)):
+            lA == rA && lM == rM
         default:
             false
         }

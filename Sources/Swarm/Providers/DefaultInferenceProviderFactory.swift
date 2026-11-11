@@ -3,16 +3,34 @@
 //
 // Opinionated default inference provider selection.
 //
-// LegacyAgent (the default tool-calling runtime) uses this factory to attempt
-// Apple Foundation Models when no explicit inference provider is configured.
+// Prefers Apple Foundation Models when the system model is available.
 
 import Foundation
 
 enum DefaultInferenceProviderFactory {
+    /// Returns an on-device Foundation Models provider when the system model is available.
+    ///
+    /// Built-in default on Apple platforms. ``OpenAICompatibleProvider`` is the
+    /// remote alternative when Foundation Models is unavailable (Linux, CI,
+    /// or no Apple Intelligence). Custom backends still inject
+    /// ``InferenceProvider`` explicitly or via `Swarm.configure(provider:)`.
     static func makeFoundationModelsProviderIfAvailable() -> (any InferenceProvider)? {
         #if canImport(FoundationModels)
-        if #available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *) {
-            return ConduitProviderSelection.foundationModelsIfAvailable()?.makeProvider()
+        if #available(macOS 26.0, iOS 26.0, visionOS 26.0, *) {
+            return FoundationModelsInferenceProvider.ifAvailable()
+        }
+        #endif
+        return nil
+    }
+
+    /// Returns a Private Cloud Compute provider when quota allows.
+    ///
+    /// Nil on older systems or when PCC is unavailable or its daily quota is
+    /// exhausted. Does not fall back to on-device.
+    static func makePrivateCloudComputeProviderIfAvailable() -> (any InferenceProvider)? {
+        #if canImport(FoundationModels)
+        if #available(macOS 27.0, iOS 27.0, visionOS 27.0, *) {
+            return FoundationModelsInferenceProvider.privateCloudComputeIfAvailable()
         }
         #endif
         return nil

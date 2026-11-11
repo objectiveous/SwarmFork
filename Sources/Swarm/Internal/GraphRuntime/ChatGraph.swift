@@ -1,4 +1,6 @@
-import CryptoKit
+// P2-1 grandfather: split pending; new files are gated at 1000 lines.
+// swiftlint:disable file_length
+#if SWARM_INTEGRATIONS
 import Foundation
 import HiveCore
 
@@ -83,7 +85,7 @@ struct DefaultMessageIDFactory: MessageIDFactory {
             data.append(0x00)
             data.append(contentsOf: Array(role.utf8))
             data.append(contentsOf: Array(String(stepIndex).utf8))
-            return "msg:" + SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            return "msg:" + SwarmSHA256.hex(data)
         }
     }
 }
@@ -552,6 +554,7 @@ extension ChatGraph {
                     id: message.id,
                     role: message.role,
                     content: message.content,
+                    reasoningContent: message.reasoningContent,
                     name: message.name,
                     toolCallID: message.toolCallID,
                     toolCalls: message.toolCalls,
@@ -596,8 +599,7 @@ extension ChatGraph {
         }
 
         private static func sha256HexLower(_ data: Data) -> String {
-            let digest = SHA256.hash(data: data)
-            return digest.map { String(format: "%02x", $0) }.joined()
+            return SwarmSHA256.hex(data)
         }
     }
 
@@ -755,6 +757,7 @@ extension ChatGraph {
                 id: assistantMessageID,
                 role: assistantMessage.role,
                 content: assistantMessage.content,
+                reasoningContent: assistantMessage.reasoningContent,
                 name: assistantMessage.name,
                 toolCallID: assistantMessage.toolCallID,
                 toolCalls: assistantMessage.toolCalls,
@@ -898,6 +901,7 @@ extension ChatGraph {
                             input.emitStream(.customDebug(name: "toolInvocationFinished"), metadata.merging([
                                 "name": call.name,
                                 "success": "true",
+                                "output": transformed,
                             ]) { current, _ in current })
                             return (index, HiveChatMessage(
                                 id: "tool:" + call.id,
@@ -938,6 +942,25 @@ extension ChatGraph {
     /// Uses the Hive clock for deterministic backoff sleep — no jitter is applied.
     /// Returns immediately on the first success, or rethrows the last error
     /// after all attempts are exhausted.
+    ///
+    /// - Note: Deliberate divergence from the canonical agent-inference retry
+    ///   seam (`RetryPolicy.execute` in `Sources/Swarm/Resilience/RetryPolicy.swift`).
+    ///   Both sides share one attempt accounting (`maxAttempts` counts **total**
+    ///   attempts including the initial attempt, minimum 1). A classifier
+    ///   closure alone cannot reconcile the remaining differences, so this
+    ///   local loop is kept:
+    ///   1. Exhaustion surface — the last operation error is rethrown verbatim
+    ///      so graph-runtime errors reach `HiveRunResult` unchanged; the agent
+    ///      path wraps exhaustion in
+    ///      `ResilienceError.retriesExhausted(attempts:lastError:)`.
+    ///   2. Retry gating — every caught error is retried unconditionally,
+    ///      including `CancellationError`; the agent path hard-gates on
+    ///      `InferenceRetryability.isRetryable` + user `shouldRetry` and never
+    ///      retries cancellation.
+    ///   3. Backoff math — saturating `delay * factor` growth where the cap is
+    ///      applied per-sleep (`min(delay, maxNs)`); the agent path evaluates
+    ///      `BackoffStrategy.delay(forAttempt:)` (including jitter strategies)
+    ///      sanitized to a fixed one-hour ceiling before sleeping.
     private static func withRetry<T>(
         policy: HiveRetryPolicy?,
         clock: any HiveClock,
@@ -964,7 +987,7 @@ extension ChatGraph {
                         if sleepNs > 0 {
                             try await clock.sleep(nanoseconds: sleepNs)
                         }
-                        delay = UInt64(Double(delay) * factor)
+                        delay = saturatedRetryDelay(delay, factor: factor, maxNanoseconds: maxNs)
                     }
                 }
             }
@@ -974,6 +997,21 @@ extension ChatGraph {
                 throw HiveRuntimeError.invalidRunOptions("Retry policy exhausted with no error recorded")
             }
         }
+    }
+
+    private static func saturatedRetryDelay(_ delay: UInt64, factor: Double, maxNanoseconds: UInt64) -> UInt64 {
+        guard delay > 0, factor.isFinite, factor > 0 else {
+            return 0
+        }
+
+        let grown = Double(delay) * factor
+        guard grown.isFinite, grown > 0 else {
+            return maxNanoseconds
+        }
+        if grown >= Double(UInt64.max) {
+            return maxNanoseconds
+        }
+        return min(UInt64(grown), maxNanoseconds)
     }
 
     private static func compactMessages(
@@ -1087,3 +1125,4 @@ private extension UInt32 {
         ]
     }
 }
+#endif

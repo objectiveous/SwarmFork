@@ -40,6 +40,24 @@ public struct AgentEnvironment: Sendable {
     }
 }
 
+/// Synchronous cancel flag shared by the timeout coordinator and tool executor.
+final class ProviderOwnedLoopGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var active = true
+
+    func deactivate() {
+        lock.lock()
+        active = false
+        lock.unlock()
+    }
+
+    var isActive: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return active
+    }
+}
+
 /// Task-local access to the current `AgentEnvironment`.
 ///
 /// Callers should generally prefer using the `.environment(...)` modifier on `AgentRuntime`

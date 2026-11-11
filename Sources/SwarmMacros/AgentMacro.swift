@@ -35,7 +35,6 @@ public struct AgentMacro: MemberMacro, ExtensionMacro {
 
     // MARK: - MemberMacro
 
-    // swiftlint:disable:next function_body_length
     public static func expansion(
         of node: AttributeSyntax,
         providingMembersOf declaration: some DeclGroupSyntax,
@@ -88,7 +87,7 @@ public struct AgentMacro: MemberMacro, ExtensionMacro {
                 }
 
                 private static func makeDefaultMemory() -> (any Memory)? {
-                    try? DefaultAgentMemory()
+                    try? Agent.makeDefaultMemory()
                 }
                 """)
         }
@@ -113,6 +112,13 @@ public struct AgentMacro: MemberMacro, ExtensionMacro {
         if !existingMembers.contains("isCancelled") {
             members.append("""
                 private var isCancelled: Bool = false
+                """)
+        }
+
+        // 7b. Last provider-reported usage, set by `process` when available.
+        if !existingMembers.contains("lastTokenUsage") {
+            members.append("""
+                private var lastTokenUsage: TokenUsage?
                 """)
         }
 
@@ -154,7 +160,6 @@ public struct AgentMacro: MemberMacro, ExtensionMacro {
 
                         let activeTracer = tracer ?? AgentEnvironmentValues.current.tracer
                         let activeMemory = resolvedMemory()
-                        let lifecycleMemory = activeMemory as? any MemorySessionLifecycle
 
                         let tracing = TracingHelper(
                             tracer: activeTracer,
@@ -164,12 +169,13 @@ public struct AgentMacro: MemberMacro, ExtensionMacro {
 
                         await observer?.onAgentStart(context: nil, agent: self, input: input)
 
-                        if let lifecycleMemory {
-                            await lifecycleMemory.beginMemorySession()
+                        if let activeMemory {
+                            await activeMemory.beginMemorySession()
                         }
 
                         do {
                             isCancelled = false
+                            lastTokenUsage = nil
 
                             // Load conversation history from session (limit to recent messages)
                             var sessionHistory: [MemoryMessage] = []
@@ -181,15 +187,9 @@ public struct AgentMacro: MemberMacro, ExtensionMacro {
 
                             // Store in memory (for AI context) if available
                             if let mem = activeMemory {
-                                // Seed session history only once for a fresh memory instance.
-                                if session != nil, await mem.isEmpty, !sessionHistory.isEmpty {
-                                    if let replayAware = mem as? any MemorySessionReplayAware {
-                                        await replayAware.importSessionHistory(sessionHistory)
-                                    } else {
-                                        for msg in sessionHistory {
-                                            await mem.add(msg)
-                                        }
-                                    }
+                                // Seed session history only once when the memory is eligible.
+                                if session != nil {
+                                    await mem.seedSessionHistoryIfNeeded(sessionHistory)
                                 }
                                 await mem.add(userMessage)
                             }
@@ -220,23 +220,23 @@ public struct AgentMacro: MemberMacro, ExtensionMacro {
                                 toolResults: [],
                                 iterationCount: 1,
                                 duration: duration,
-                                tokenUsage: nil,
+                                tokenUsage: lastTokenUsage,
                                 metadata: [:]
                             )
 
                             await tracing.traceComplete(result: result)
                             await observer?.onAgentEnd(context: nil, agent: self, result: result)
 
-                            if let lifecycleMemory {
-                                await lifecycleMemory.endMemorySession()
+                            if let activeMemory {
+                                await activeMemory.endMemorySession()
                             }
 
                             return result
                         } catch {
                             await observer?.onError(context: nil, agent: self, error: error)
                             await tracing.traceError(error)
-                            if let lifecycleMemory {
-                                await lifecycleMemory.endMemorySession()
+                            if let activeMemory {
+                                await activeMemory.endMemorySession()
                             }
                             throw error
                         }
@@ -510,14 +510,11 @@ public struct AgentMacro: MemberMacro, ExtensionMacro {
 /// Errors that can occur during @AgentActor macro expansion.
 enum AgentMacroError: Error, CustomStringConvertible {
     case onlyApplicableToActor
-    case missingProcessMethod
 
     var description: String {
         switch self {
         case .onlyApplicableToActor:
             return "@AgentActor can only be applied to actors"
-        case .missingProcessMethod:
-            return "@AgentActor requires a process(_ input: String) method"
         }
     }
 }

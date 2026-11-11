@@ -6,8 +6,9 @@
 import Testing
 @testable import Swarm
 
-@Suite("AgentResult.runtimeEngine")
+@Suite("AgentResult.runtimeEngine", .ephemeralDefaultStores)
 struct AgentResultRuntimeEngineTests {
+
 
     @Test("returns nil when metadata has no runtime.engine key")
     func returnsNilWhenAbsent() {
@@ -31,5 +32,16 @@ struct AgentResultRuntimeEngineTests {
             metadata: ["runtime.engine": .int(1)]
         )
         #expect(result.runtimeEngine == nil)
+    }
+
+    @Test("native Agent.run records native runtime engine")
+    func nativeAgentRunRecordsNativeRuntimeEngine() async throws {
+        let provider = MockInferenceProvider(responses: ["hi"])
+        let agent = try Agent(instructions: "Reply shortly.", inferenceProvider: provider)
+
+        let result = try await agent.run("hello")
+
+        #expect(result.output == "hi")
+        #expect(result.runtimeEngine == "native")
     }
 }

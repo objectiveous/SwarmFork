@@ -1,9 +1,13 @@
+#if SWARM_INTEGRATIONS
 import Foundation
+import MembraneCore
 @testable import Swarm
 import Testing
+import Wax
 
 @Suite("Membrane Integration")
 struct MembraneIntegrationTests {
+    #if canImport(Membrane)
     @Test("strict4k_jitAvoidsPromptEnvelopeTruncation")
     func strict4k_jitAvoidsPromptEnvelopeTruncation() async throws {
         let provider = MockInferenceProvider()
@@ -21,7 +25,8 @@ struct MembraneIntegrationTests {
                 contextMode: .strict4k,
                 defaultTracingEnabled: false
             ),
-            inferenceProvider: provider
+            inferenceProvider: provider,
+            runEnvironment: AgentRunEnvironment(defaultMemoryStoreURL: temporaryWaxStoreURL())
         ).environment(
             \.membrane,
             MembraneEnvironment(
@@ -54,6 +59,7 @@ struct MembraneIntegrationTests {
         #expect(schemaNames.contains("Remove_Tools"))
         #expect(schemaNames.contains("resolve_pointer"))
     }
+    #endif
 
     @Test("membraneRuntimeFeatureFlagsPropagateToProviderSettings")
     func membraneRuntimeFeatureFlagsPropagateToProviderSettings() async throws {
@@ -71,7 +77,8 @@ struct MembraneIntegrationTests {
                 contextMode: .strict4k,
                 defaultTracingEnabled: false
             ),
-            inferenceProvider: provider
+            inferenceProvider: provider,
+            runEnvironment: AgentRunEnvironment(defaultMemoryStoreURL: temporaryWaxStoreURL())
         ).environment(
             \.membrane,
             MembraneEnvironment(
@@ -113,7 +120,8 @@ struct MembraneIntegrationTests {
                 contextMode: .strict4k,
                 defaultTracingEnabled: false
             ),
-            inferenceProvider: provider
+            inferenceProvider: provider,
+            runEnvironment: AgentRunEnvironment(defaultMemoryStoreURL: temporaryWaxStoreURL())
         ).environment(
             \.membrane,
             MembraneEnvironment(isEnabled: true, adapter: throwingAdapter)
@@ -126,6 +134,7 @@ struct MembraneIntegrationTests {
         #expect(result.metadata["membrane.fallback.error"]?.stringValue?.contains("forced membrane failure") == true)
     }
 
+    #if canImport(Membrane)
     @Test("Pointerized structured tool output resolves as JSON")
     func pointerizedStructuredToolOutputResolvesAsJSON() async throws {
         let provider = PointerResolvingInferenceProvider()
@@ -137,7 +146,8 @@ struct MembraneIntegrationTests {
                 maxIterations: 4,
                 defaultTracingEnabled: false
             ),
-            inferenceProvider: provider
+            inferenceProvider: provider,
+            runEnvironment: AgentRunEnvironment(defaultMemoryStoreURL: temporaryWaxStoreURL())
         ).environment(
             \.membrane,
             MembraneEnvironment(
@@ -160,6 +170,7 @@ struct MembraneIntegrationTests {
         #expect(dictionary["message"] as? String == "quoted \"value\" with newline\nsecond line")
         #expect(dictionary["count"] as? Int == 42)
     }
+    #endif
 
     // MARK: - one-8h1.10 characterization (OneWorkspace investigation)
     //
@@ -169,6 +180,7 @@ struct MembraneIntegrationTests {
     // (and forks consuming this adapter) can map the error correctly
     // without a magic-number lookup.
 
+    #if canImport(Membrane)
     @Test("Add_Tools called with missing tool_names argument throws invalidInternalToolArguments (`error 1`)")
     func addToolsMissingArgsThrowsErrorCase1() async throws {
         let adapter = DefaultMembraneAgentAdapter(
@@ -207,6 +219,7 @@ struct MembraneIntegrationTests {
             )
         }
     }
+    #endif
 
     @Test("MembraneAgentAdapterError.invalidInternalToolArguments is the second case (NSError code 1)")
     func errorCaseOrdinalIsOne() {
@@ -226,6 +239,7 @@ struct MembraneIntegrationTests {
         #expect(otherNS.code == 0)
     }
 
+    #if canImport(Membrane)
     @Test("Add_Tools with valid tool_names succeeds and returns confirmation message")
     func addToolsValidArgsSucceeds() async throws {
         let adapter = DefaultMembraneAgentAdapter(
@@ -284,6 +298,7 @@ struct MembraneIntegrationTests {
         )
         #expect(planned.toolSchemas.contains(where: { $0.name == "zzz_tool" }) == false)
     }
+    #endif
 
     @Test("strict4k planning does not drop tools when below jit threshold")
     func strict4kPlanningKeepsSmallToolSetsVisible() async throws {
@@ -306,6 +321,148 @@ struct MembraneIntegrationTests {
         #expect(names.contains("alpha"))
         #expect(names.contains("beta"))
         #expect(names.contains("gamma"))
+    }
+
+    #if canImport(Membrane)
+    @Test("strict4k planning enters JIT at the lowered four-tool threshold")
+    func strict4kPlanningUsesLoweredJITThreshold() async throws {
+        let adapter = DefaultMembraneAgentAdapter(
+            configuration: MembraneFeatureConfiguration(jitMinToolCount: 12, defaultJITLoadCount: 2)
+        )
+        let toolSchemas = [
+            ToolSchema(name: "alpha", description: "alpha", parameters: []),
+            ToolSchema(name: "beta", description: "beta", parameters: []),
+            ToolSchema(name: "gamma", description: "gamma", parameters: []),
+            ToolSchema(name: "delta", description: "delta", parameters: []),
+        ]
+
+        let planned = try await adapter.plan(
+            prompt: "hello",
+            toolSchemas: toolSchemas,
+            profile: .strict4k
+        )
+
+        let names = Set(planned.toolSchemas.map(\.name))
+        #expect(planned.mode == "jit")
+        #expect(names.contains("alpha"))
+        #expect(names.contains("beta"))
+        #expect(names.contains("gamma") == false)
+        #expect(names.contains("delta") == false)
+        #expect(names.contains(MembraneInternalToolName.loadToolSchema))
+        #expect(names.contains(MembraneInternalToolName.addTools))
+        #expect(names.contains(MembraneInternalToolName.removeTools))
+        #expect(names.contains(MembraneInternalToolName.resolvePointer))
+    }
+    #endif
+
+    #if canImport(SQLite3)
+    @Test("Wax membrane pointer recall does not index private payload bytes")
+    func waxMembranePointerRecallDoesNotIndexPrivatePayloadBytes() async throws {
+        let storage = WaxMembraneStorage(url: temporaryWaxStoreURL())
+        let secret = "SWARM-AUDIT-040-private-payload-\(UUID().uuidString)"
+        _ = try await storage.store(
+            payload: Data(secret.utf8),
+            dataType: .document,
+            summary: "Public pointer summary only"
+        )
+
+        let secretMatches = try await storage.recall(query: secret, limit: 5)
+        #expect(secretMatches.allSatisfy { !$0.content.contains(secret) })
+
+        let summaryMatches = try await storage.recall(query: "Public pointer summary", limit: 5)
+        #expect(summaryMatches.contains { $0.content.contains("Public pointer summary") })
+        #expect(summaryMatches.allSatisfy { !$0.content.contains(secret) })
+        #expect(summaryMatches.allSatisfy { !$0.content.contains("__payload_base64__") })
+        #expect(summaryMatches.allSatisfy { !$0.content.contains(Data(secret.utf8).base64EncodedString()) })
+    }
+
+    @Test("Wax membrane pointer delete removes persisted payload")
+    func waxMembranePointerDeleteRemovesPersistedPayload() async throws {
+        let url = temporaryWaxStoreURL()
+        let storage = WaxMembraneStorage(url: url)
+        let payload = Data("SWARM-AUDIT-041-persisted-delete".utf8)
+        let pointer = try await storage.store(
+            payload: payload,
+            dataType: .document,
+            summary: "Delete me"
+        )
+        #expect(try await storage.resolve(pointerID: pointer.id) == payload)
+
+        await storage.delete(pointerID: pointer.id)
+
+        await #expect(throws: MembraneError.self) {
+            _ = try await storage.resolve(pointerID: pointer.id)
+        }
+
+        let matches = try await storage.recall(query: "Delete me", limit: 5)
+        #expect(matches.allSatisfy { $0.provenance.metadata["membrane.pointer.id"] != pointer.id })
+    }
+    #endif
+
+    @Test("Wax membrane pointer store rolls back payload frame when indexing fails")
+    func waxMembranePointerStoreRollsBackPayloadFrameWhenIndexingFails() async throws {
+        let url = temporaryWaxStoreURL()
+        let failingIndex = FailingWaxPointerIndex()
+        let storage = WaxMembraneStorage(url: url) { _ in failingIndex }
+
+        await #expect(throws: FailingWaxPointerIndex.Failure.self) {
+            _ = try await storage.store(
+                payload: Data("SWARM-AUDIT-042-rollback-payload".utf8),
+                dataType: .document,
+                summary: "Must roll back"
+            )
+        }
+
+        let frameStore = try await Wax.FrameStore.open(at: url)
+        let activePayloadFrames = try await frameStore.frames().filter {
+            $0.status == .active &&
+                $0.metadata["membrane.kind"] == "membrane.pointer.payloadFrame"
+        }
+        try await frameStore.close()
+
+        #expect(activePayloadFrames.isEmpty)
+    }
+
+    @Test("close during first touch releases the orphan and recovers", .timeLimit(.minutes(1)))
+    func closeDuringFirstTouchReleasesOrphanAndRecovers() async throws {
+        let url = temporaryWaxStoreURL()
+        let factory = GatedPointerIndexFactory()
+        let storage = WaxMembraneStorage(url: url) { _ in await factory.makeIndex() }
+
+        // First touch blocks inside the factory while a concurrent close
+        // consumes the in-flight construction. Ordering is gate-driven, not
+        // timing-driven: the factory cannot return until the test opens it.
+        let storeTask = Task {
+            try await storage.store(
+                payload: Data("race-payload".utf8),
+                dataType: .document,
+                summary: "race"
+            )
+        }
+        await factory.waitForFirstEntry()
+        await storage.delete(pointerID: "nonexistent")
+        await factory.openGate()
+
+        let pointer = try await storeTask.value
+        #expect(pointer.summary == "race")
+        #expect(pointer.byteSize == Data("race-payload".utf8).count)
+
+        // The consumed first open is closed, never installed; the waiter
+        // transparently retries onto a second open.
+        #expect(await factory.entryCount() == 2)
+        let indexes = await factory.createdIndexes()
+        try #require(indexes.count == 2)
+        #expect(await indexes[0].closeCount == 1)
+        #expect(await indexes[1].closeCount == 0)
+
+        // The recovered generation stays functional (each store reopens after
+        // its own persist-phase close).
+        _ = try await storage.store(
+            payload: Data("second".utf8),
+            dataType: .document,
+            summary: "second"
+        )
+        #expect(await factory.entryCount() == 3)
     }
 }
 
@@ -371,6 +528,13 @@ private func makeTestTools(count: Int) -> [any AnyJSONTool] {
     }
 }
 
+private func temporaryWaxStoreURL() -> URL {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("MembraneIntegrationTests", isDirectory: true)
+    try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    return root.appendingPathComponent("\(UUID().uuidString).mv2s")
+}
+
 private struct MembraneTestTool: AnyJSONTool, Sendable {
     let name: String
     let description: String
@@ -403,7 +567,84 @@ private struct StructuredPayloadTool: AnyJSONTool, Sendable {
     }
 }
 
-private actor PointerResolvingInferenceProvider: InferenceProvider, ConversationInferenceProvider {
+private actor FailingWaxPointerIndex: WaxPointerIndex {
+    struct Failure: Error {}
+
+    func save(_: String, metadata _: [String: String]) async throws {
+        throw Failure()
+    }
+
+    func flush() async throws {}
+
+    func search(_ query: String, options _: Wax.Memory.SearchOptions) async throws -> Wax.Memory.Results {
+        Wax.Memory.Results(query: query, items: [], totalTokens: 0)
+    }
+
+    func close() async throws {}
+}
+
+/// Gated factory for the close-during-first-touch test: entries block until
+/// the test opens the gate, so the close/store interleaving is deterministic.
+private actor GatedPointerIndexFactory {
+    private var entries = 0
+    private var gateOpen = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var gateWaiters: [CheckedContinuation<Void, Never>] = []
+    private var created: [RecordingWaxPointerIndex] = []
+
+    func makeIndex() async -> RecordingWaxPointerIndex {
+        entries += 1
+        let waiters = entryWaiters
+        entryWaiters = []
+        waiters.forEach { $0.resume() }
+        if !gateOpen {
+            await withCheckedContinuation { gateWaiters.append($0) }
+        }
+        let index = RecordingWaxPointerIndex()
+        created.append(index)
+        return index
+    }
+
+    func waitForFirstEntry() async {
+        if entries > 0 {
+            return
+        }
+        await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    func openGate() {
+        gateOpen = true
+        let waiters = gateWaiters
+        gateWaiters = []
+        waiters.forEach { $0.resume() }
+    }
+
+    func entryCount() -> Int {
+        entries
+    }
+
+    func createdIndexes() -> [RecordingWaxPointerIndex] {
+        created
+    }
+}
+
+private actor RecordingWaxPointerIndex: WaxPointerIndex {
+    private(set) var closeCount = 0
+
+    func save(_: String, metadata _: [String: String]) async throws {}
+
+    func flush() async throws {}
+
+    func search(_ query: String, options _: Wax.Memory.SearchOptions) async throws -> Wax.Memory.Results {
+        Wax.Memory.Results(query: query, items: [], totalTokens: 0)
+    }
+
+    func close() async throws {
+        closeCount += 1
+    }
+}
+
+private actor PointerResolvingInferenceProvider: InferenceProvider, MessagesFromPromptInference {
     private var turn = 0
 
     func generate(prompt _: String, options _: InferenceOptions) async throws -> String {
@@ -514,3 +755,4 @@ private actor ThrowingMembraneAdapter: MembraneAgentAdapter {
     func restore(checkpointData _: Data?) async throws {}
     func snapshotCheckpointData() async throws -> Data? { nil }
 }
+#endif

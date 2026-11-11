@@ -151,12 +151,41 @@ struct ParallelToolExecutorTests {
         #expect(executionCount == 0)
     }
 
+    @Test("Fail-fast strategy rejects disabled tools before execution")
+    func failFastRejectsDisabledToolBeforeExecution() async throws {
+        let counter = ToolExecutionCounter()
+        let enabledTool = CountingTool(name: "enabled_tool", counter: counter)
+        let disabledTool = DisabledTestTool(name: "disabled_tool")
+
+        let registry = try await createRegistry(tools: [enabledTool, disabledTool])
+        let executor = ParallelToolExecutor()
+        let agent = createMockAgent()
+
+        let calls = [
+            ToolCall(toolName: "enabled_tool", arguments: [:]),
+            ToolCall(toolName: "disabled_tool", arguments: [:])
+        ]
+
+        await #expect(throws: AgentError.self) {
+            _ = try await executor.executeInParallel(
+                calls,
+                using: registry,
+                agent: agent,
+                context: nil,
+                errorStrategy: .failFast
+            )
+        }
+
+        let executionCount = await counter.snapshot()
+        #expect(executionCount == 0)
+    }
+
     @Test("Error strategy .failFast throws on first error")
     func errorStrategyFailFast() async throws {
         let successTool1 = MockDelayTool(name: "success1", delay: .zero, resultValue: .string("ok1"))
         let errorTool = MockErrorTool(
             name: "error_tool",
-            error: AgentError.toolExecutionFailed(toolName: "error_tool", underlyingError: "Test failure")
+            error: AgentError.toolFailure(toolName: "error_tool", message: "Test failure", cause: nil)
         )
         let successTool2 = MockDelayTool(name: "success2", delay: .zero, resultValue: .string("ok2"))
 
@@ -186,10 +215,10 @@ struct ParallelToolExecutorTests {
 
         #expect(thrownError != nil)
         if let agentError = thrownError as? AgentError {
-            if case let .toolExecutionFailed(toolName, _) = agentError {
+            if case let .toolFailure(toolName, _, _) = agentError {
                 #expect(toolName == "error_tool")
             } else {
-                Issue.record("Expected toolExecutionFailed error")
+                Issue.record("Expected toolFailure error")
             }
         }
     }
@@ -198,11 +227,11 @@ struct ParallelToolExecutorTests {
     func errorStrategyCollectErrors() async throws {
         let errorTool1 = MockErrorTool(
             name: "error1",
-            error: AgentError.toolExecutionFailed(toolName: "error1", underlyingError: "First failure")
+            error: AgentError.toolFailure(toolName: "error1", message: "First failure", cause: nil)
         )
         let errorTool2 = MockErrorTool(
             name: "error2",
-            error: AgentError.toolExecutionFailed(toolName: "error2", underlyingError: "Second failure")
+            error: AgentError.toolFailure(toolName: "error2", message: "Second failure", cause: nil)
         )
         let successTool = MockDelayTool(name: "success", delay: .zero, resultValue: .string("ok"))
 
@@ -231,11 +260,11 @@ struct ParallelToolExecutorTests {
 
         #expect(thrownError != nil)
         if let agentError = thrownError as? AgentError {
-            if case let .toolExecutionFailed(toolName, underlyingError) = agentError {
+            if case let .toolFailure(toolName, message, _) = agentError {
                 #expect(toolName == "parallel_execution")
-                #expect(underlyingError.contains("Multiple tools failed"))
+                #expect(message?.contains("Multiple tools failed") == true)
             } else {
-                Issue.record("Expected toolExecutionFailed with parallel_execution")
+                Issue.record("Expected toolFailure with parallel_execution")
             }
         }
     }

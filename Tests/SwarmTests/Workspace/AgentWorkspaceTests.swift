@@ -106,6 +106,125 @@ struct AgentWorkspaceTests {
         #expect(prompt?.contains("Local agent instructions.") == true)
     }
 
+    @Test("Workspace agents layer workspace context with default memory")
+    func workspaceAgentsLayerWorkspaceContextWithDefaultMemory() async throws {
+        let workspaceRoot = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: workspaceRoot) }
+
+        let workspace = try AgentWorkspace(
+            bundleRoot: workspaceRoot,
+            writableRoot: workspaceRoot.appendingPathComponent("Writable", isDirectory: true),
+            indexCacheRoot: workspaceRoot.appendingPathComponent("Cache", isDirectory: true)
+        )
+        _ = try await workspace.makeWriter().recordFact(
+            title: "Refund Window",
+            content: "Workspace refunds use the blue-lantern refund marker."
+        )
+
+        let agent = try Agent.onDevice(
+            "Local agent instructions.",
+            workspace: workspace,
+            configuration: AgentConfiguration(name: "workspace-memory", defaultTracingEnabled: false),
+            inferenceProvider: MockInferenceProvider(responses: ["ok"])
+        )
+
+        #expect(agent.memory != nil)
+        guard let memory = agent.memory else { return }
+
+        await memory.add(.user("Default memory remembers the ember-archive marker."))
+
+        let context = await memory.context(for: "refund ember archive", tokenLimit: 600)
+        #expect(context.contains("blue-lantern refund marker"))
+        #expect(context.contains("ember-archive marker"))
+    }
+
+    @Test("Workspace agents seed session history into the default memory layer")
+    func workspaceAgentsSeedSessionHistoryIntoDefaultMemoryLayer() async throws {
+        let workspaceRoot = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: workspaceRoot) }
+
+        let workspace = try AgentWorkspace(
+            bundleRoot: workspaceRoot,
+            writableRoot: workspaceRoot.appendingPathComponent("Writable", isDirectory: true),
+            indexCacheRoot: workspaceRoot.appendingPathComponent("Cache", isDirectory: true)
+        )
+        _ = try await workspace.makeWriter().recordFact(
+            title: "Workspace Fact",
+            content: "Workspace memory includes the copper-lake marker."
+        )
+
+        let session = InMemorySession(sessionId: "workspace-seed")
+        try await session.addItems([
+            .user("Session history includes the violet-signal marker.")
+        ])
+
+        let agent = try Agent.onDevice(
+            "Local agent instructions.",
+            workspace: workspace,
+            configuration: AgentConfiguration(name: "workspace-seed", defaultTracingEnabled: false),
+            inferenceProvider: MockInferenceProvider(responses: ["ok"])
+        )
+
+        _ = try await agent.run("Use the remembered context.", session: session)
+
+        guard let memory = agent.memory else {
+            Issue.record("workspace agent should expose layered memory")
+            return
+        }
+
+        let context = await memory.context(for: "copper violet signal", tokenLimit: 800)
+        #expect(context.contains("copper-lake marker"))
+        #expect(context.contains("violet-signal marker"))
+    }
+
+    #if SWARM_INTEGRATIONS && canImport(ContextCore)
+    @Test("Workspace agents isolate default memory when switching sessions")
+    func workspaceAgentsIsolateDefaultMemoryWhenSwitchingSessions() async throws {
+        let workspaceRoot = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: workspaceRoot) }
+
+        let workspace = try AgentWorkspace(
+            bundleRoot: workspaceRoot,
+            writableRoot: workspaceRoot.appendingPathComponent("Writable", isDirectory: true),
+            indexCacheRoot: workspaceRoot.appendingPathComponent("Cache", isDirectory: true)
+        )
+        _ = try await workspace.makeWriter().recordFact(
+            title: "Workspace Fact",
+            content: "Workspace memory includes the silver-branch marker."
+        )
+
+        let firstSession = InMemorySession(sessionId: "workspace-session-a")
+        try await firstSession.addItems([
+            .user("First session includes the amber-session marker.")
+        ])
+
+        let secondSession = InMemorySession(sessionId: "workspace-session-b")
+        try await secondSession.addItems([
+            .user("Second session includes the cobalt-session marker.")
+        ])
+
+        let agent = try Agent.onDevice(
+            "Local agent instructions.",
+            workspace: workspace,
+            configuration: AgentConfiguration(name: "workspace-switch", defaultTracingEnabled: false),
+            inferenceProvider: MockInferenceProvider(responses: ["first", "second"])
+        )
+
+        _ = try await agent.run("First turn.", session: firstSession)
+        _ = try await agent.run("Second turn.", session: secondSession)
+
+        guard let memory = agent.memory else {
+            Issue.record("workspace agent should expose layered memory")
+            return
+        }
+
+        let context = await memory.context(for: "amber cobalt silver branch", tokenLimit: 800)
+        #expect(context.contains("silver-branch marker"))
+        #expect(context.contains("cobalt-session marker"))
+        #expect(!context.contains("amber-session marker"))
+    }
+    #endif
+
     @Test("Agent.spec uses listed SKILL.md content as retrieved context")
     func agentSpecUsesSkillContentAsRetrievedContext() async throws {
         let workspaceRoot = try makeWorkspaceRoot()
@@ -153,6 +272,210 @@ struct AgentWorkspaceTests {
 
         let prompt = await capturedPromptText(from: provider)
         #expect(prompt?.contains("refund window") == true)
+    }
+
+    #if SWARM_INTEGRATIONS && canImport(ContextCore)
+    @Test("Workspace agents keep isolated default memory inside the workspace cache")
+    func workspaceAgentsKeepIsolatedDefaultMemoryInsideWorkspaceCache() async throws {
+        let workspaceRoot = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: workspaceRoot) }
+        try writeFile(at: workspaceRoot.appendingPathComponent("AGENTS.md"), contents: "Global workspace rule.")
+        try writeFile(
+            at: workspaceRoot.appendingPathComponent(".swarm/agents/support.md"),
+            contents: """
+            ---
+            schema_version: 1
+            id: support
+            title: Support
+            skills: []
+            revision: 1
+            updated_at: 2026-05-18T00:00:00Z
+            ---
+            You are the support agent.
+            """
+        )
+
+        let cacheRoot = workspaceRoot.appendingPathComponent("Cache", isDirectory: true)
+        let workspace = try AgentWorkspace(
+            bundleRoot: workspaceRoot,
+            writableRoot: workspaceRoot.appendingPathComponent("Writable", isDirectory: true),
+            indexCacheRoot: cacheRoot
+        )
+        let onDeviceAgent = try Agent.onDevice(
+            "Local helper.",
+            workspace: workspace,
+            configuration: AgentConfiguration(name: "local", defaultTracingEnabled: false),
+            inferenceProvider: MockInferenceProvider(responses: ["local"])
+        )
+        let agent = try Agent.spec(
+            "support",
+            in: workspace,
+            configuration: AgentConfiguration(name: "support", defaultTracingEnabled: false),
+            inferenceProvider: MockInferenceProvider(responses: ["ok"])
+        )
+
+        _ = try await onDeviceAgent.run("hello")
+        _ = try await agent.run("hello")
+
+        let onDeviceWaxStore = cacheRoot
+            .appendingPathComponent("default-agent-memory/on-device", isDirectory: true)
+            .appendingPathComponent("wax-memory.mv2s")
+        let specWaxStore = cacheRoot
+            .appendingPathComponent("default-agent-memory/support", isDirectory: true)
+            .appendingPathComponent("wax-memory.mv2s")
+        #expect(FileManager.default.fileExists(atPath: onDeviceWaxStore.path))
+        #expect(FileManager.default.fileExists(atPath: specWaxStore.path))
+    }
+    #endif
+
+    @Test("Agent.spec unions constrained tool allowlists across skills")
+    func agentSpecUnionsConstrainedToolAllowlists() throws {
+        let workspaceRoot = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: workspaceRoot) }
+
+        try writeFile(
+            at: workspaceRoot.appendingPathComponent(".swarm/agents/support.md"),
+            contents: """
+            ---
+            schema_version: 1
+            id: support
+            title: Support
+            skills:
+              - refunds
+              - tickets
+            revision: 1
+            updated_at: 2026-05-13T00:00:00Z
+            ---
+            You are the support agent.
+            """
+        )
+        try writeFile(
+            at: workspaceRoot.appendingPathComponent(".swarm/skills/refunds/SKILL.md"),
+            contents: """
+            ---
+            name: refunds
+            description: Refund support
+            allowed-tools:
+              - refund_lookup
+            ---
+            Use refund_lookup for refund status.
+            """
+        )
+        try writeFile(
+            at: workspaceRoot.appendingPathComponent(".swarm/skills/tickets/SKILL.md"),
+            contents: """
+            ---
+            name: tickets
+            description: Ticket support
+            allowed-tools:
+              - ticket_create
+            ---
+            Use ticket_create for support tickets.
+            """
+        )
+
+        let workspace = try AgentWorkspace(
+            bundleRoot: workspaceRoot,
+            writableRoot: workspaceRoot.appendingPathComponent("Writable", isDirectory: true),
+            indexCacheRoot: workspaceRoot.appendingPathComponent("Cache", isDirectory: true)
+        )
+        let agent = try Agent.spec("support", in: workspace) {
+            [
+                MockTool(name: "refund_lookup"),
+                MockTool(name: "ticket_create"),
+                MockTool(name: "unlisted")
+            ]
+        }
+
+        #expect(Set(agent.tools.map(\.name)) == ["refund_lookup", "ticket_create"])
+    }
+
+    @Test("Workspace validation rejects agent spec id mismatch")
+    func workspaceValidationRejectsAgentSpecIDMismatch() async throws {
+        let workspaceRoot = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: workspaceRoot) }
+        try writeFile(
+            at: workspaceRoot.appendingPathComponent(".swarm/agents/support.md"),
+            contents: """
+            ---
+            schema_version: 1
+            id: billing
+            title: Billing
+            skills: []
+            revision: 1
+            updated_at: 2026-05-17T00:00:00Z
+            ---
+            You are the billing agent.
+            """
+        )
+
+        let workspace = try AgentWorkspace(
+            bundleRoot: workspaceRoot,
+            writableRoot: workspaceRoot.appendingPathComponent("Writable", isDirectory: true),
+            indexCacheRoot: workspaceRoot.appendingPathComponent("Cache", isDirectory: true)
+        )
+
+        let report = try await workspace.validate()
+        #expect(report.isValid == false)
+        #expect(report.issues.contains {
+            $0.path == ".swarm/agents/support.md" && $0.message.contains("id")
+        })
+    }
+
+    @Test("Workspace rejects path traversal agent spec identifiers")
+    func workspaceRejectsPathTraversalAgentSpecIdentifiers() throws {
+        let workspaceRoot = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: workspaceRoot) }
+        try writeFile(
+            at: workspaceRoot.appendingPathComponent(".swarm/outside.md"),
+            contents: """
+            ---
+            schema_version: 1
+            id: outside
+            title: Outside
+            skills: []
+            revision: 1
+            updated_at: 2026-05-17T00:00:00Z
+            ---
+            This spec must not be loadable through path traversal.
+            """
+        )
+
+        let workspace = try AgentWorkspace(
+            bundleRoot: workspaceRoot,
+            writableRoot: workspaceRoot.appendingPathComponent("Writable", isDirectory: true),
+            indexCacheRoot: workspaceRoot.appendingPathComponent("Cache", isDirectory: true)
+        )
+
+        #expect(throws: AgentWorkspaceError.self) {
+            _ = try workspace.loadAgentSpec(id: "../outside")
+        }
+    }
+
+    @Test("Workspace rejects path traversal skill names")
+    func workspaceRejectsPathTraversalSkillNames() throws {
+        let workspaceRoot = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: workspaceRoot) }
+        try writeFile(
+            at: workspaceRoot.appendingPathComponent(".swarm/outside/SKILL.md"),
+            contents: """
+            ---
+            name: outside
+            description: Outside
+            ---
+            This skill must not be loadable through path traversal.
+            """
+        )
+
+        let workspace = try AgentWorkspace(
+            bundleRoot: workspaceRoot,
+            writableRoot: workspaceRoot.appendingPathComponent("Writable", isDirectory: true),
+            indexCacheRoot: workspaceRoot.appendingPathComponent("Cache", isDirectory: true)
+        )
+
+        #expect(throws: AgentWorkspaceError.self) {
+            _ = try workspace.loadSkills(named: ["../outside"])
+        }
     }
 
     @Test("Workspace validation reports malformed SKILL.md")

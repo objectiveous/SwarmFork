@@ -87,7 +87,7 @@ struct MCPResponseTests {
         // This test verifies the Swift API works correctly with properly encoded values.
 
         // Create response using factory method (proper internal API)
-        let response = MCPResponse.success(id: "resp-1", result: .dictionary(["tools": .array([])]))
+        let response = try MCPResponse.success(id: "resp-1", result: .dictionary(["tools": .array([])]))
 
         #expect(response.jsonrpc == "2.0")
         #expect(response.id == "resp-1")
@@ -129,7 +129,7 @@ struct MCPResponseTests {
 
     @Test("success factory creates valid response")
     func successFactory() throws {
-        let response = MCPResponse.success(id: "success-1", result: .string("done"))
+        let response = try MCPResponse.success(id: "success-1", result: .string("done"))
 
         #expect(response.jsonrpc == "2.0")
         #expect(response.id == "success-1")
@@ -140,7 +140,7 @@ struct MCPResponseTests {
     @Test("failure factory creates valid error response")
     func failureFactory() throws {
         let errorObj = MCPErrorObject(code: -32600, message: "Invalid request")
-        let response = MCPResponse.failure(id: "fail-1", error: errorObj)
+        let response = try MCPResponse.failure(id: "fail-1", error: errorObj)
 
         #expect(response.jsonrpc == "2.0")
         #expect(response.id == "fail-1")
@@ -176,6 +176,61 @@ struct MCPResponseTests {
         let data = jsonString.data(using: .utf8)!
         #expect(throws: DecodingError.self) {
             _ = try JSONDecoder().decode(MCPResponse.self, from: data)
+        }
+    }
+
+    @Test("response decodes numeric JSON-RPC id")
+    func responseDecodesNumericID() throws {
+        let jsonString = """
+        {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "result": "ok"
+        }
+        """
+        let data = jsonString.data(using: .utf8)!
+        let response = try JSONDecoder().decode(MCPResponse.self, from: data)
+        #expect(response.id == "7")
+        #expect(response.result == .string("ok"))
+    }
+
+    @Test("success factory rejects empty id")
+    func successFactoryRejectsEmptyID() {
+        #expect(throws: MCPError.self) {
+            _ = try MCPResponse.success(id: "", result: .string("ok"))
+        }
+    }
+
+    @Test("failure factory rejects empty id")
+    func failureFactoryRejectsEmptyID() {
+        #expect(throws: MCPError.self) {
+            _ = try MCPResponse.failure(
+                id: "",
+                error: MCPErrorObject(code: -32600, message: "invalid")
+            )
+        }
+    }
+}
+
+@Suite("MCPProtocolVersion Tests")
+struct MCPProtocolVersionTests {
+    @Test("negotiates supported current and legacy versions")
+    func negotiatesSupportedVersions() throws {
+        #expect(try MCPProtocolVersion.negotiate(serverReported: MCPProtocolVersion.current) == "2025-11-25")
+        #expect(try MCPProtocolVersion.negotiate(serverReported: MCPProtocolVersion.legacy) == "2024-11-05")
+        #expect(try MCPProtocolVersion.negotiate(serverReported: "2025-06-18") == "2025-06-18")
+    }
+
+    @Test("unsupported or missing versions fail loudly")
+    func unsupportedVersionsFail() {
+        #expect(throws: MCPError.self) {
+            _ = try MCPProtocolVersion.negotiate(serverReported: "1999-01-01")
+        }
+        #expect(throws: MCPError.self) {
+            _ = try MCPProtocolVersion.negotiate(serverReported: nil)
+        }
+        #expect(throws: MCPError.self) {
+            _ = try MCPProtocolVersion.negotiate(serverReported: "")
         }
     }
 }
@@ -343,5 +398,61 @@ struct MCPResourceTests {
         #expect(throws: MCPError.self) {
             _ = try MCPResourceContent(uri: "file:///broken")
         }
+    }
+
+    @Test("resource content debugDescription renders short text")
+    func resourceContentDebugDescriptionText() throws {
+        let content = try MCPResourceContent(
+            uri: "file:///readme.md",
+            mimeType: "text/markdown",
+            text: "# Hello"
+        )
+
+        #expect(content.debugDescription == "MCPResourceContent(uri: \"file:///readme.md\", mimeType: \"text/markdown\", text: \"# Hello\")")
+    }
+
+    @Test("resource content debugDescription truncates long text at 50 chars")
+    func resourceContentDebugDescriptionLongText() throws {
+        let long = String(repeating: "a", count: 60)
+        let content = try MCPResourceContent(uri: "file:///long.txt", text: long)
+
+        #expect(content.debugDescription == "MCPResourceContent(uri: \"file:///long.txt\", text: \"\(String(repeating: "a", count: 50))...\")")
+    }
+
+    @Test("resource content debugDescription renders blob size")
+    func resourceContentDebugDescriptionBlob() throws {
+        let content = try MCPResourceContent(
+            uri: "file:///image.png",
+            mimeType: "image/png",
+            blob: "iVBORw0KGgoAAAANSUhEUg=="
+        )
+
+        #expect(content.debugDescription == "MCPResourceContent(uri: \"file:///image.png\", mimeType: \"image/png\", blob: <24 chars>)")
+    }
+}
+
+@Suite("MCPWireCodec Tests")
+struct MCPWireCodecTests {
+    @Test("unwrapped isError envelopes throw")
+    func unwrappedIsErrorThrows() {
+        let envelope: SendableValue = .dictionary([
+            "content": .array([.dictionary(["type": .string("text"), "text": .string("boom")])]),
+            "isError": .bool(true)
+        ])
+
+        #expect(throws: MCPError.self) {
+            _ = try MCPWireCodec.toolCallResult(envelope, toolName: "explode", style: .unwrappedContent)
+        }
+    }
+
+    @Test("rawEnvelope returns isError envelopes")
+    func rawEnvelopeReturnsIsError() throws {
+        let envelope: SendableValue = .dictionary([
+            "content": .array([.dictionary(["type": .string("text"), "text": .string("boom")])]),
+            "isError": .bool(true)
+        ])
+
+        let raw = try MCPWireCodec.toolCallResult(envelope, toolName: "explode", style: .rawEnvelope)
+        #expect(raw == envelope)
     }
 }

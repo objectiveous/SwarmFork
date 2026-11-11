@@ -1,12 +1,22 @@
 import Foundation
+#if SWARM_INTEGRATIONS && canImport(Membrane)
 import Membrane
-import MembraneHive
+#endif
 
+/// Configuration for Membrane JIT tool loading and pointerization.
+///
+/// This is the canonical public type. When Integrations is enabled, adapters
+/// map these fields onto Membrane's internal session configuration at the
+/// boundary. Defaults match the live `DefaultMembraneAgentAdapter` path:
+/// pointerize tool results at 400 bytes (strict4k overrides to 100).
 public struct MembraneFeatureConfiguration: Sendable, Equatable {
     public static let `default` = MembraneFeatureConfiguration()
 
     public var jitMinToolCount: Int
     public var defaultJITLoadCount: Int
+    /// Byte threshold at which tool results become pointers. Default is 400 —
+    /// the value the shipped adapter path uses. Membrane's internal session
+    /// type uses the same default so both sides agree.
     public var pointerThresholdBytes: Int
     public var pointerSummaryMaxChars: Int
     /// Optional provider-runtime feature policy flags keyed by namespaced identifier.
@@ -99,15 +109,30 @@ public protocol MembraneAgentAdapter: Sendable {
         arguments: [String: SendableValue]
     ) async throws -> String?
 
+    /// Restores adapter-local JIT, allow-list, pointer, and usage state.
+    ///
+    /// Passing `nil` clears state. This does not restore Hive graph
+    /// checkpoints. There is no `MembraneHive` module; Hive durable runs that
+    /// need membrane state pass their own adapter on `RuntimeContext`.
     func restore(checkpointData: Data?) async throws
+
+    /// Snapshots adapter-local JIT, allow-list, pointer, and usage state.
+    ///
+    /// The payload is JSON understood by ``restore(checkpointData:)``. It is
+    /// not automatically written into Hive ChatGraph.
     func snapshotCheckpointData() async throws -> Data?
 }
 
+#if SWARM_INTEGRATIONS && canImport(Membrane)
+/// Default Membrane adapter: JIT tool loading and pointerization.
+///
+/// ``restore(checkpointData:)`` and ``snapshotCheckpointData()`` persist only
+/// this adapter's tool, pointer, and usage state. They are not wired into
+/// Hive ChatGraph. `MembraneHive` never shipped; do not wait for it.
 public actor DefaultMembraneAgentAdapter: MembraneAgentAdapter {
     public init(configuration: MembraneFeatureConfiguration = .default) {
         self.configuration = configuration
 
-        jitLoader = JITToolLoader(jitMinToolCount: configuration.jitMinToolCount)
         let store = InMemoryPointerStore()
         pointerStore = store
         pointerResolver = PointerResolver(
@@ -118,11 +143,6 @@ public actor DefaultMembraneAgentAdapter: MembraneAgentAdapter {
             )
         )
         toolPlan = .allowAll
-
-        // TODO: Restore when MembraneHive ships MembraneCheckpointAdapter
-        // #if canImport(MembraneHive)
-        // checkpointAdapter = MembraneCheckpointAdapter()
-        // #endif
     }
 
     public func plan(
@@ -136,15 +156,11 @@ public actor DefaultMembraneAgentAdapter: MembraneAgentAdapter {
 
         let manifests = sortedSchemas.map { ToolManifest(name: $0.name, description: $0.description) }
 
-        // For small-context providers (strict4k), force allowList even with few tools.
-        // Default JIT threshold is 12; for strict4k we drop to 4 to save prompt tokens.
+        // For small-context providers (strict4k), enter JIT with fewer tools to save prompt tokens.
         let effectiveMinTools = profile.preset == .strict4k ? min(4, configuration.jitMinToolCount) : configuration.jitMinToolCount
+        let jitLoader = JITToolLoader(jitMinToolCount: effectiveMinTools)
         var nextPlan: ToolPlan
-        if manifests.count >= effectiveMinTools {
-            nextPlan = jitLoader.plan(tools: manifests, existingPlan: toolPlan)
-        } else {
-            nextPlan = jitLoader.plan(tools: manifests, existingPlan: toolPlan)
-        }
+        nextPlan = jitLoader.plan(tools: manifests, existingPlan: toolPlan)
 
         switch nextPlan {
         case .allowAll:
@@ -183,7 +199,6 @@ public actor DefaultMembraneAgentAdapter: MembraneAgentAdapter {
             toolCount: toolSchemas.count
         )
 
-        try await syncCheckpointState(totalTokens: profile.budget.maxInputTokens)
         return MembranePlannedBoundary(
             prompt: distilledPrompt,
             toolSchemas: MembraneInternalTools.sortedSchemas(selectedSchemas),
@@ -208,13 +223,11 @@ public actor DefaultMembraneAgentAdapter: MembraneAgentAdapter {
         let decision = try await resolver.pointerizeIfNeeded(toolName: toolName, output: output)
         switch decision {
         case let .inline(text):
-            try await syncCheckpointState()
             return MembraneToolResultBoundary(textForConversation: text)
 
         case let .pointer(pointer, replacementText):
             pointerIDs.append(pointer.id)
             pointerIDs = Array(Set(pointerIDs)).sorted()
-            try await syncCheckpointState()
             return MembraneToolResultBoundary(
                 textForConversation: replacementText,
                 pointerID: pointer.id
@@ -241,7 +254,6 @@ public actor DefaultMembraneAgentAdapter: MembraneAgentAdapter {
 
             loadedToolNames.append(toolName)
             loadedToolNames = Array(Set(loadedToolNames)).sorted()
-            try await syncCheckpointState()
             return "Loaded tool schema: \(toolName)"
 
         case MembraneInternalToolName.addTools:
@@ -253,7 +265,6 @@ public actor DefaultMembraneAgentAdapter: MembraneAgentAdapter {
                 )
             }
             loadedToolNames = Array(Set(loadedToolNames + names)).sorted()
-            try await syncCheckpointState()
             return "Added tools: \(names.sorted().joined(separator: ", "))"
 
         case MembraneInternalToolName.removeTools:
@@ -267,7 +278,6 @@ public actor DefaultMembraneAgentAdapter: MembraneAgentAdapter {
             let removals = Set(names)
             loadedToolNames.removeAll { removals.contains($0) }
             loadedToolNames.sort()
-            try await syncCheckpointState()
             return "Removed tools: \(names.sorted().joined(separator: ", "))"
 
         case MembraneInternalToolName.resolvePointer:
@@ -321,15 +331,9 @@ public actor DefaultMembraneAgentAdapter: MembraneAgentAdapter {
     private var pointerIDs: [String] = []
     private var usageCounts: [String: Int] = [:]
 
-    private let jitLoader: JITToolLoader
     private let pointerStore: InMemoryPointerStore
     private let pointerResolver: PointerResolver
     private var toolPlan: ToolPlan
-
-    // TODO: Restore when MembraneHive ships MembraneCheckpointAdapter
-    // #if canImport(MembraneHive)
-    // private let checkpointAdapter: MembraneCheckpointAdapter
-    // #endif
 
     private func parseToolNames(_ value: SendableValue?) -> [String] {
         guard let value else { return [] }
@@ -392,10 +396,6 @@ public actor DefaultMembraneAgentAdapter: MembraneAgentAdapter {
         return await PromptTokenBudgeting.prefix(prompt, maxTokens: adjustedHead, using: counter) + marker
     }
 
-    private func syncCheckpointState(totalTokens _: Int = 4_096) async throws {
-        _ = try await snapshotCheckpointData()
-    }
-
     private struct CheckpointState: Codable, Sendable {
         let loadedToolNames: [String]
         let allowListToolNames: [String]
@@ -403,3 +403,37 @@ public actor DefaultMembraneAgentAdapter: MembraneAgentAdapter {
         let usageCounts: [String: Int]
     }
 }
+#else
+public actor DefaultMembraneAgentAdapter: MembraneAgentAdapter {
+    public init(configuration _: MembraneFeatureConfiguration = .default) {}
+
+    public func plan(
+        prompt: String,
+        toolSchemas: [ToolSchema],
+        profile _: ContextProfile
+    ) async throws -> MembranePlannedBoundary {
+        MembranePlannedBoundary(prompt: prompt, toolSchemas: toolSchemas, mode: "disabled")
+    }
+
+    public func transformToolResult(
+        toolName _: String,
+        output: String,
+        profile _: ContextProfile = .balanced
+    ) async throws -> MembraneToolResultBoundary {
+        MembraneToolResultBoundary(textForConversation: output)
+    }
+
+    public func handleInternalToolCall(
+        name _: String,
+        arguments _: [String: SendableValue]
+    ) async throws -> String? {
+        nil
+    }
+
+    public func restore(checkpointData _: Data?) async throws {}
+
+    public func snapshotCheckpointData() async throws -> Data? {
+        nil
+    }
+}
+#endif

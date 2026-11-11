@@ -22,9 +22,15 @@ public protocol PromptTokenCounter: Sendable {
 /// An inference provider that can expose a prompt token counter.
 ///
 /// Providers conform to this when they can count tokens for the exact model
-/// they are serving. Swarm uses this to avoid heuristic budgeting when the
-/// provider can supply a native count.
+/// they are serving. Agent reads ``InferenceProvider/promptTokenCounter`` instead
+/// of this deprecated compatibility identity.
+@available(*, deprecated, message: "Expose promptTokenCounter on InferenceProvider")
 public protocol PromptTokenCountingInferenceProvider: InferenceProvider, PromptTokenCounter {}
+
+@available(*, deprecated, message: "Expose promptTokenCounter on InferenceProvider")
+public extension PromptTokenCountingInferenceProvider {
+    var promptTokenCounter: (any PromptTokenCounter)? { self }
+}
 
 public extension PromptTokenCounter {
     /// Counts tokens across multiple text fragments.
@@ -77,28 +83,9 @@ enum PromptTokenBudgeting {
         maxTokens: Int,
         using counter: (any PromptTokenCounter)? = nil
     ) async -> String {
-        guard maxTokens > 0 else { return "" }
-
-        if await countTokens(in: text, using: counter) <= maxTokens {
-            return text
+        await ContextWindow.longestPrefix(of: text, maxTokens: maxTokens, minimum: "") { candidate in
+            await countTokens(in: candidate, using: counter)
         }
-
-        var lower = 0
-        var upper = text.count
-        var best = ""
-
-        while lower <= upper {
-            let mid = (lower + upper) / 2
-            let candidate = prefix(text, maxCharacters: mid)
-            if await countTokens(in: candidate, using: counter) <= maxTokens {
-                best = candidate
-                lower = mid + 1
-            } else {
-                upper = mid - 1
-            }
-        }
-
-        return best
     }
 
     static func suffix(
@@ -128,13 +115,6 @@ enum PromptTokenBudgeting {
         }
 
         return best
-    }
-
-    private static func prefix(_ text: String, maxCharacters: Int) -> String {
-        guard maxCharacters > 0 else { return "" }
-        guard text.count > maxCharacters else { return text }
-        let end = text.index(text.startIndex, offsetBy: maxCharacters)
-        return String(text[..<end])
     }
 
     private static func suffix(_ text: String, maxCharacters: Int) -> String {

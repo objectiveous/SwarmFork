@@ -84,9 +84,10 @@ import Foundation
             do {
                 return try ArithmeticParser.evaluate(trimmed)
             } catch let error as ArithmeticParser.ParserError {
-                throw AgentError.toolExecutionFailed(
+                throw AgentError.toolFailure(
                     toolName: name,
-                    underlyingError: "Failed to evaluate expression: \(error)"
+                    message: "Failed to evaluate expression: \(error)",
+                    cause: error
                 )
             }
         }
@@ -357,7 +358,7 @@ public extension WebSearchTool {
 ///
 /// Example:
 /// ```swift
-/// let agent = Agent(tools: BuiltInTools.all)
+/// let agent = try Agent(tools: BuiltInTools.all)
 /// ```
 public enum BuiltInTools {
     #if canImport(Darwin)
@@ -381,7 +382,7 @@ public enum BuiltInTools {
     /// - Apple platforms: calculator, dateTime, string, semanticCompactor
     /// - Linux: dateTime, string, semanticCompactor
     public static var all: [any AnyJSONTool] {
-        var tools: [any AnyJSONTool] = [dateTime, string, bridgeToolToAnyJSON(SemanticCompactorTool())]
+        var tools: [any AnyJSONTool] = [dateTime, string, semanticCompactor]
         #if canImport(Darwin)
         tools.append(calculator)
         #endif

@@ -1,3 +1,4 @@
+#if SWARM_OTEL
 // OpenTelemetryInferenceProvider.swift
 // SwarmOpenTelemetry
 
@@ -7,9 +8,9 @@ import Swarm
 
 /// An inference-provider wrapper that emits OpenTelemetry GenAI spans.
 ///
-/// Advanced provider protocols are exposed through conditional conformances, so
-/// wrapping a provider does not advertise capabilities the underlying provider
-/// cannot actually satisfy.
+/// The wrapper forwards ``InferenceProvider`` methods, ``promptTokenCounter``,
+/// and advertised capability bits. Callers read the bitset and do not probe
+/// extra protocol identities.
 public struct OpenTelemetryInferenceProvider<Base: InferenceProvider>: @unchecked Sendable,
     CapabilityReportingInferenceProvider,
     InferenceProviderMetadata
@@ -29,6 +30,10 @@ public struct OpenTelemetryInferenceProvider<Base: InferenceProvider>: @unchecke
 
     public var capabilities: InferenceProviderCapabilities {
         InferenceProviderCapabilities.resolved(for: base)
+    }
+
+    public var promptTokenCounter: (any PromptTokenCounter)? {
+        base.promptTokenCounter
     }
 
     public var providerName: String? {
@@ -75,17 +80,30 @@ public struct OpenTelemetryInferenceProvider<Base: InferenceProvider>: @unchecke
         }
     }
 
-    fileprivate let base: Base
-    fileprivate let tracer: any OpenTelemetryApi.Tracer
-    fileprivate let captureContent: Bool
-
-    fileprivate var metadata: (any InferenceProviderMetadata)? {
-        base as? any InferenceProviderMetadata
+    public func streamWithToolCalls(
+        prompt: String,
+        tools: [ToolSchema],
+        options: InferenceOptions
+    ) -> AsyncThrowingStream<InferenceStreamUpdate, Error> {
+        instrumentToolStream(inputLength: prompt.count, toolCount: tools.count, options: options) {
+            base.streamWithToolCalls(prompt: prompt, tools: tools, options: options)
+        }
     }
-}
 
-extension OpenTelemetryInferenceProvider: ConversationInferenceProvider where Base: ConversationInferenceProvider {
-  public func generate(messages: [InferenceMessage], options: InferenceOptions) async throws -> String {
+    public func generateStructured(
+        prompt: String,
+        request: StructuredOutputRequest,
+        options: InferenceOptions
+    ) async throws -> StructuredOutputResult {
+        try await withLLMSpan(operation: "chat", inputLength: prompt.count, options: options) { span in
+            span.setAttribute(key: "gen_ai.output.type", value: "json")
+            let result = try await base.generateStructured(prompt: prompt, request: request, options: options)
+            span.setAttribute(key: "gen_ai.response.output_length", value: result.rawJSON.count)
+            return result
+        }
+    }
+
+    public func generate(messages: [InferenceMessage], options: InferenceOptions) async throws -> String {
         try await withLLMSpan(operation: "chat", inputLength: Self.inputLength(messages), options: options) { span in
             span.setAttribute(key: "gen_ai.request.messages.count", value: messages.count)
             let response = try await base.generate(messages: messages, options: options)
@@ -94,7 +112,7 @@ extension OpenTelemetryInferenceProvider: ConversationInferenceProvider where Ba
         }
     }
 
-  public func generateWithToolCalls(
+    public func generateWithToolCalls(
         messages: [InferenceMessage],
         tools: [ToolSchema],
         options: InferenceOptions
@@ -107,10 +125,28 @@ extension OpenTelemetryInferenceProvider: ConversationInferenceProvider where Ba
             return response
         }
     }
-}
 
-extension OpenTelemetryInferenceProvider: StreamingConversationInferenceProvider where Base: StreamingConversationInferenceProvider {
-  public func stream(
+    public func generateWithToolCalls(
+        messages: [InferenceMessage],
+        tools: [ToolSchema],
+        options: InferenceOptions,
+        toolExecutor: ToolCallExecutor?
+    ) async throws -> InferenceResponse {
+        try await withLLMSpan(operation: "chat", inputLength: Self.inputLength(messages), options: options) { span in
+            span.setAttribute(key: "gen_ai.request.messages.count", value: messages.count)
+            span.setAttribute(key: "gen_ai.request.tools.count", value: tools.count)
+            let response = try await base.generateWithToolCalls(
+                messages: messages,
+                tools: tools,
+                options: options,
+                toolExecutor: toolExecutor
+            )
+            apply(response: response, to: span)
+            return response
+        }
+    }
+
+    public func stream(
         messages: [InferenceMessage],
         options: InferenceOptions
     ) -> AsyncThrowingStream<String, Error> {
@@ -124,23 +160,8 @@ extension OpenTelemetryInferenceProvider: StreamingConversationInferenceProvider
             span.setAttribute(key: "gen_ai.response.output_length", value: outputLength)
         }
     }
-}
 
-extension OpenTelemetryInferenceProvider: ToolCallStreamingInferenceProvider where Base: ToolCallStreamingInferenceProvider {
-  public func streamWithToolCalls(
-        prompt: String,
-        tools: [ToolSchema],
-        options: InferenceOptions
-    ) -> AsyncThrowingStream<InferenceStreamUpdate, Error> {
-        instrumentToolStream(inputLength: prompt.count, toolCount: tools.count, options: options) {
-            base.streamWithToolCalls(prompt: prompt, tools: tools, options: options)
-        }
-    }
-}
-
-extension OpenTelemetryInferenceProvider: ToolCallStreamingConversationInferenceProvider
-where Base: ToolCallStreamingConversationInferenceProvider {
-  public func streamWithToolCalls(
+    public func streamWithToolCalls(
         messages: [InferenceMessage],
         tools: [ToolSchema],
         options: InferenceOptions
@@ -149,26 +170,24 @@ where Base: ToolCallStreamingConversationInferenceProvider {
             base.streamWithToolCalls(messages: messages, tools: tools, options: options)
         }
     }
-}
 
-extension OpenTelemetryInferenceProvider: StructuredOutputInferenceProvider where Base: StructuredOutputInferenceProvider {
-  public func generateStructured(
-        prompt: String,
-        request: StructuredOutputRequest,
-        options: InferenceOptions
-    ) async throws -> StructuredOutputResult {
-        try await withLLMSpan(operation: "chat", inputLength: prompt.count, options: options) { span in
-            span.setAttribute(key: "gen_ai.output.type", value: "json")
-            let result = try await base.generateStructured(prompt: prompt, request: request, options: options)
-            span.setAttribute(key: "gen_ai.response.output_length", value: result.rawJSON.count)
-            return result
+    public func streamWithToolCalls(
+        messages: [InferenceMessage],
+        tools: [ToolSchema],
+        options: InferenceOptions,
+        toolExecutor: ToolCallExecutor?
+    ) -> AsyncThrowingStream<InferenceStreamUpdate, Error> {
+        instrumentToolStream(inputLength: Self.inputLength(messages), toolCount: tools.count, options: options) {
+            base.streamWithToolCalls(
+                messages: messages,
+                tools: tools,
+                options: options,
+                toolExecutor: toolExecutor
+            )
         }
     }
-}
 
-extension OpenTelemetryInferenceProvider: StructuredOutputConversationInferenceProvider
-where Base: StructuredOutputConversationInferenceProvider {
-  public func generateStructured(
+    public func generateStructured(
         messages: [InferenceMessage],
         request: StructuredOutputRequest,
         options: InferenceOptions
@@ -181,7 +200,29 @@ where Base: StructuredOutputConversationInferenceProvider {
             return result
         }
     }
+
+    fileprivate let base: Base
+    fileprivate let tracer: any OpenTelemetryApi.Tracer
+    fileprivate let captureContent: Bool
+
+    fileprivate var metadata: (any InferenceProviderMetadata)? {
+        base as? any InferenceProviderMetadata
+    }
 }
+
+extension OpenTelemetryInferenceProvider: ConversationInferenceProvider where Base: ConversationInferenceProvider {}
+
+extension OpenTelemetryInferenceProvider: StreamingConversationInferenceProvider where Base: StreamingConversationInferenceProvider {}
+
+extension OpenTelemetryInferenceProvider: ToolCallStreamingInferenceProvider where Base: ToolCallStreamingInferenceProvider {}
+
+extension OpenTelemetryInferenceProvider: ToolCallStreamingConversationInferenceProvider
+where Base: ToolCallStreamingConversationInferenceProvider {}
+
+extension OpenTelemetryInferenceProvider: StructuredOutputInferenceProvider where Base: StructuredOutputInferenceProvider {}
+
+extension OpenTelemetryInferenceProvider: StructuredOutputConversationInferenceProvider
+where Base: StructuredOutputConversationInferenceProvider {}
 
 private extension OpenTelemetryInferenceProvider {
     static func inputLength(_ messages: [InferenceMessage]) -> Int {
@@ -196,14 +237,16 @@ private extension OpenTelemetryInferenceProvider {
     ) async throws -> T {
         let builder = makeSpanBuilder(operation: operation, inputLength: inputLength, options: options)
         return try await builder.withActiveSpan { span in
-            prepare(span: span)
-            do {
-                let result = try await body(span)
-                span.status = .ok
-                return result
-            } catch {
-                OpenTelemetryAttributes.recordError(error, on: span)
-                throw error
+            try await OpenTelemetryTracePropagation.withCurrentSpan(span) {
+                prepare(span: span)
+                do {
+                    let result = try await body(span)
+                    span.status = .ok
+                    return result
+                } catch {
+                    OpenTelemetryAttributes.recordError(error, on: span)
+                    throw error
+                }
             }
         }
     }
@@ -282,7 +325,7 @@ private extension OpenTelemetryInferenceProvider {
                                 completedToolCallCount = calls.count
                             case let .usage(tokenUsage):
                                 usage = tokenUsage
-                            case .toolCallPartial:
+                            case .toolCallPartial, .finishedTurn:
                                 break
                             }
                             continuation.yield(update)
@@ -321,3 +364,4 @@ public extension InferenceProvider {
         )
     }
 }
+#endif

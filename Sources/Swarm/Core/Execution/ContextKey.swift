@@ -12,6 +12,12 @@ import Foundation
 /// `ContextKey` provides compile-time type safety for context values,
 /// eliminating runtime type errors when storing and retrieving data.
 ///
+/// Typed storage is a namespace separate from untyped string storage:
+/// unlike ``MetadataKey`` — whose entries remain visible to raw-string
+/// dictionary access — a value written through
+/// ``AgentContext/setTyped(_:value:)`` is readable only through
+/// ``AgentContext/getTyped(_:)``, not by its string name.
+///
 /// Example:
 /// ```swift
 /// // Define typed keys
@@ -24,8 +30,10 @@ import Foundation
 /// }
 ///
 /// // Use with type safety
+/// await context.set(.originalInput, "User query")
+/// let input: String? = await context.get(.originalInput)
 /// await context.setTyped(.userID, value: "user-123")
-/// let id: String? = await context.getTyped(.userID)  // Type-safe!
+/// let id: String? = await context.getTyped(.userID)
 /// ```
 public struct ContextKey<Value: Sendable>: Hashable, Sendable {
     /// The string name of the key.
@@ -68,6 +76,15 @@ public extension ContextKey where Value == String {
 
     /// API version being used.
     static let apiVersion = ContextKey("api_version")
+
+    /// The original input that started orchestration (`original_input`).
+    static let originalInput = ContextKey("original_input")
+
+    /// The output from the previous agent in the chain (`previous_output`).
+    static let previousOutput = ContextKey("previous_output")
+
+    /// The name of the current executing agent (`current_agent_name`).
+    static let currentAgentName = ContextKey("current_agent_name")
 }
 
 // MARK: - Standard Int Keys
@@ -113,6 +130,9 @@ public extension ContextKey where Value == [String] {
 
     /// Feature flags enabled.
     static let featureFlags = ContextKey("feature_flags")
+
+    /// The execution path as a list of agent names (`execution_path`).
+    static let executionPath = ContextKey("execution_path")
 }
 
 // MARK: - Standard Date Keys
@@ -123,12 +143,106 @@ public extension ContextKey where Value == Date {
 
     /// Expiration time.
     static let expiresAt = ContextKey("expires_at")
+
+    /// The start time of orchestration (`start_time`).
+    static let startTime = ContextKey("start_time")
 }
 
 // MARK: - AgentContext Typed Extensions
 
+/// Typed context access over `AgentContext`'s unified slot store.
+///
+/// Keys and values are paired at compile time: a slot is identified by the
+/// key's string name together with its static `Value` type, so two keys
+/// sharing a name across different value types occupy distinct slots and a
+/// read can never observe another key's payload. Values are encoded once on
+/// write and decoded once on read by `ContextValueCodec`; no runtime casting
+/// participates in typed reads.
 public extension AgentContext {
+    /// Stores a string under a typed context key.
+    ///
+    /// Writes the slot store and clears any raw entry of the same name so
+    /// ``snapshot`` projects this value.
+    func set(_ key: ContextKey<String>, _ value: String) {
+        setTyped(key, value: value)
+        _ = remove(key.name)
+    }
+
+    /// Reads a string stored under a typed context key, falling back to the
+    /// raw namespace when the slot is empty.
+    func get(_ key: ContextKey<String>) -> String? {
+        getTyped(key) ?? get(key.name)?.stringValue
+    }
+
+    /// Stores an integer under a typed context key.
+    func set(_ key: ContextKey<Int>, _ value: Int) {
+        setTyped(key, value: value)
+        _ = remove(key.name)
+    }
+
+    /// Reads an integer stored under a typed context key.
+    func get(_ key: ContextKey<Int>) -> Int? {
+        getTyped(key) ?? get(key.name)?.intValue
+    }
+
+    /// Stores a Boolean under a typed context key.
+    func set(_ key: ContextKey<Bool>, _ value: Bool) {
+        setTyped(key, value: value)
+        _ = remove(key.name)
+    }
+
+    /// Reads a Boolean stored under a typed context key.
+    func get(_ key: ContextKey<Bool>) -> Bool? {
+        getTyped(key) ?? get(key.name)?.boolValue
+    }
+
+    /// Stores a double under a typed context key.
+    func set(_ key: ContextKey<Double>, _ value: Double) {
+        setTyped(key, value: value)
+        _ = remove(key.name)
+    }
+
+    /// Reads a double stored under a typed context key.
+    func get(_ key: ContextKey<Double>) -> Double? {
+        getTyped(key) ?? get(key.name)?.doubleValue
+    }
+
+    /// Stores a string array under a typed context key.
+    func set(_ key: ContextKey<[String]>, _ value: [String]) {
+        setTyped(key, value: value)
+        _ = remove(key.name)
+    }
+
+    /// Reads a string array stored under a typed context key.
+    func get(_ key: ContextKey<[String]>) -> [String]? {
+        if let typed = getTyped(key) {
+            return typed
+        }
+        return get(key.name)?.arrayValue?.compactMap(\.stringValue)
+    }
+
+    /// Stores a date under a typed context key.
+    func set(_ key: ContextKey<Date>, _ value: Date) {
+        setTyped(key, value: value)
+        _ = remove(key.name)
+    }
+
+    /// Reads a date stored under a typed context key.
+    func get(_ key: ContextKey<Date>) -> Date? {
+        if let typed = getTyped(key) {
+            return typed
+        }
+        guard let timestamp = get(key.name)?.doubleValue else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: timestamp)
+    }
+
     /// Sets a typed value in the context.
+    ///
+    /// The value is encoded into the unified slot store under this key's
+    /// `(Value type, name)` identity. Untyped string storage is a separate
+    /// raw namespace; raw writes are not visible to typed reads.
     ///
     /// - Parameters:
     ///   - key: The typed context key.
@@ -140,19 +254,16 @@ public extension AgentContext {
     /// await context.setTyped(.isAuthenticated, value: true)
     /// ```
     func setTyped<T: Sendable & Encodable>(_ key: ContextKey<T>, value: T) {
-        do {
-            let sendableValue = try SendableValue(encoding: value)
-            set(key.name, value: sendableValue)
-        } catch {
-            // If encoding fails, store as string representation
-            set(key.name, value: .string(String(describing: value)))
-        }
+        setValueSlot(key, payload: ContextValueCodec.encode(value))
     }
 
     /// Gets a typed value from the context.
     ///
     /// - Parameter key: The typed context key.
-    /// - Returns: The value if found and type matches, nil otherwise.
+    /// - Returns: The stored value decoded as the key's value type, or nil
+    ///   when nothing is stored under this slot. When the value type is
+    ///   itself Optional, storing `nil` creates a null slot whose read
+    ///   succeeds with a nil payload rather than returning nil for absence.
     ///
     /// Example:
     /// ```swift
@@ -160,45 +271,8 @@ public extension AgentContext {
     /// let isAuth: Bool? = await context.getTyped(.isAuthenticated)
     /// ```
     func getTyped<T: Sendable & Decodable>(_ key: ContextKey<T>) -> T? {
-        guard let sendableValue = get(key.name) else {
-            return nil
-        }
-
-        // Handle primitive types directly
-        if T.self == String.self {
-            return sendableValue.stringValue as? T
-        }
-        if T.self == Int.self {
-            return sendableValue.intValue as? T
-        }
-        if T.self == Double.self {
-            return sendableValue.doubleValue as? T
-        }
-        if T.self == Bool.self {
-            return sendableValue.boolValue as? T
-        }
-
-        // Handle arrays
-        if T.self == [String].self {
-            if let array = sendableValue.arrayValue {
-                let strings = array.compactMap(\.stringValue)
-                return strings as? T
-            }
-        }
-
-        // Handle Date
-        if T.self == Date.self {
-            if let timestamp = sendableValue.doubleValue {
-                return Date(timeIntervalSince1970: timestamp) as? T
-            }
-        }
-
-        // For complex types, try to decode
-        do {
-            return try sendableValue.decode()
-        } catch {
-            return nil
-        }
+        guard let payload = valueSlotPayload(for: key) else { return nil }
+        return ContextValueCodec.decode(payload, as: T.self)
     }
 
     /// Gets a typed value from the context with a default.
@@ -218,6 +292,9 @@ public extension AgentContext {
 
     /// Removes a typed value from the context.
     ///
+    /// Only this key's own slot is removed; same-named slots of other value
+    /// types and raw namespace entries are untouched.
+    ///
     /// - Parameter key: The typed context key.
     ///
     /// Example:
@@ -225,13 +302,13 @@ public extension AgentContext {
     /// await context.removeTyped(.userID)
     /// ```
     func removeTyped(_ key: ContextKey<some Sendable>) {
-        _ = remove(key.name)
+        removeValueSlot(key)
     }
 
     /// Checks if a typed key exists in the context.
     ///
     /// - Parameter key: The typed context key.
-    /// - Returns: True if the key exists.
+    /// - Returns: True if a value exists for this exact slot.
     ///
     /// Example:
     /// ```swift
@@ -240,6 +317,6 @@ public extension AgentContext {
     /// }
     /// ```
     func hasTyped(_ key: ContextKey<some Sendable>) -> Bool {
-        get(key.name) != nil
+        hasValueSlot(key)
     }
 }

@@ -1,3 +1,5 @@
+// P2-1 grandfather: split pending; new files are gated at 1000 lines.
+// swiftlint:disable file_length
 import Foundation
 import Swarm
 
@@ -15,6 +17,8 @@ public enum CapabilityFamily: String, CaseIterable, Sendable, Hashable {
     case observability = "observability"
     case mcp = "mcp"
     case providers = "providers"
+    case foundationModels = "foundation-models"
+    case voice = "voice"
 }
 
 public enum CapabilityScenarioKind: String, Sendable {
@@ -116,7 +120,15 @@ public struct CapabilityScenarioContext: Sendable {
 }
 
 public struct CapabilityShowcase: Sendable {
-    public static let requiredFamilies = Set(CapabilityFamily.allCases)
+    /// Families the matrix must cover in the current build configuration.
+    /// Durable Hive checkpointing requires the Integrations trait.
+    public static var requiredFamilies: Set<CapabilityFamily> {
+        #if SWARM_INTEGRATIONS
+        Set(CapabilityFamily.allCases)
+        #else
+        Set(CapabilityFamily.allCases).subtracting([.durable])
+        #endif
+    }
 
     public let scenarios: [CapabilityScenario]
 
@@ -200,7 +212,7 @@ private extension CapabilityShowcase {
     }
 
     static func makeScenarios(environment: [String: String]) -> [CapabilityScenario] {
-        let deterministic: [CapabilityScenario] = [
+        var deterministic: [CapabilityScenario] = [
             .init(
                 id: "agent-tools",
                 name: "Agent Tools",
@@ -265,13 +277,6 @@ private extension CapabilityShowcase {
                 runHandler: runResilienceScenario
             ),
             .init(
-                id: "durable",
-                name: "Durable Execution",
-                families: [.durable],
-                kind: .deterministic,
-                runHandler: runDurableScenario
-            ),
-            .init(
                 id: "observability",
                 name: "Observability",
                 families: [.observability],
@@ -292,7 +297,47 @@ private extension CapabilityShowcase {
                 kind: .deterministic,
                 runHandler: runProvidersScenario
             ),
+            .init(
+                id: "foundation-models",
+                name: "Foundation Models Path",
+                families: [.foundationModels, .providers],
+                kind: .deterministic,
+                runHandler: runFoundationModelsScenario
+            ),
+            .init(
+                id: "voice",
+                name: "Voice",
+                families: [.voice],
+                kind: .deterministic,
+                runHandler: runVoiceScenario
+            ),
+            .init(
+                id: "voice-bargein",
+                name: "Voice Barge-In",
+                families: [.voice],
+                kind: .deterministic,
+                runHandler: runVoiceBargeInScenario
+            ),
+            .init(
+                id: "voice-workflow",
+                name: "Voice Workflow",
+                families: [.voice],
+                kind: .deterministic,
+                runHandler: runVoiceWorkflowScenario
+            ),
         ]
+
+        #if SWARM_INTEGRATIONS
+        deterministic.append(
+            .init(
+                id: "durable",
+                name: "Durable Execution",
+                families: [.durable],
+                kind: .deterministic,
+                runHandler: runDurableScenario
+            )
+        )
+        #endif
 
         let smoke: [CapabilityScenario] = [
             .init(
@@ -301,7 +346,15 @@ private extension CapabilityShowcase {
                 families: [.providers],
                 kind: .smoke
             ) { context in
-                try await runLiveProviderSmokeScenario(context: context, environment: environment)
+                try await runLiveProviderSmokeScenario(context: context)
+            },
+            .init(
+                id: "live-foundation-models-smoke",
+                name: "Live Foundation Models Smoke",
+                families: [.foundationModels, .providers],
+                kind: .smoke
+            ) { context in
+                try await runLiveFoundationModelsSmokeScenario(context: context, environment: environment)
             },
         ]
 
@@ -713,7 +766,7 @@ private func runGuardrailsScenario(context: CapabilityScenarioContext) async thr
 
 private func runResilienceScenario(context: CapabilityScenarioContext) async throws -> CapabilityScenarioResult {
     let retryCounter = AttemptCounter()
-    let retryResult = try await RetryPolicy(maxAttempts: 2, backoff: .immediate).execute {
+    let retryResult = try await RetryPolicy(maxAttempts: 3, backoff: .immediate).execute {
         let attempt = await retryCounter.incrementAndGet()
         if attempt < 3 {
             throw CapabilityShowcaseError.expectationFailed("retry \(attempt)")
@@ -769,6 +822,7 @@ private func runResilienceScenario(context: CapabilityScenarioContext) async thr
     )
 }
 
+#if SWARM_INTEGRATIONS
 private func runDurableScenario(context: CapabilityScenarioContext) async throws -> CapabilityScenarioResult {
     let provider = ScriptedInferenceProvider(responses: ["running", "done"])
     let agent = try Agent("Checkpoint progress.", memory: makeScenarioMemory(), inferenceProvider: provider)
@@ -799,6 +853,7 @@ private func runDurableScenario(context: CapabilityScenarioContext) async throws
         ]
     )
 }
+#endif
 
 private func runObservabilityScenario(context: CapabilityScenarioContext) async throws -> CapabilityScenarioResult {
     let tracer = RecordingTracer()
@@ -908,39 +963,49 @@ private func runProvidersScenario(context: CapabilityScenarioContext) async thro
 // MARK: - Smoke Scenario
 
 private func runLiveProviderSmokeScenario(
-    context: CapabilityScenarioContext,
-    environment: [String: String]
+    context: CapabilityScenarioContext
 ) async throws -> CapabilityScenarioResult {
-    guard let model = environment["SWARM_SHOWCASE_OLLAMA_MODEL"], !model.isEmpty else {
+    #if canImport(FoundationModels)
+    if #available(macOS 26.0, iOS 26.0, visionOS 26.0, *) {
+        guard let provider = FoundationModelsInferenceProvider.ifAvailable() else {
+            return .init(
+                id: "live-provider-smoke",
+                name: "Live Provider Smoke",
+                families: [.providers],
+                status: .skipped,
+                summary: "Apple Foundation Models are not available on this host."
+            )
+        }
+        let agent = try Agent("Reply with the single word ok.", memory: makeScenarioMemory(), inferenceProvider: provider)
+        let result = try await agent.run("Say ok.")
+        let artifact = try context.writeArtifact(named: "live-provider-smoke.txt", contents: result.output)
         return .init(
             id: "live-provider-smoke",
             name: "Live Provider Smoke",
             families: [.providers],
-            status: .skipped,
-            summary: "Set SWARM_SHOWCASE_OLLAMA_MODEL to run the live provider smoke check."
+            status: .passed,
+            summary: "Ran a live Foundation Models smoke check.",
+            evidence: [
+                .init(label: "live-output", detail: result.output, artifactPath: context.relativeArtifactPath(for: artifact)),
+            ]
         )
     }
+    #endif
 
-    let provider = LLM.ollama(model)
-    let agent = try Agent("Reply with the single word ok.", memory: makeScenarioMemory(), inferenceProvider: provider)
-    let result = try await agent.run("Say ok.")
-    let artifact = try context.writeArtifact(named: "live-provider-smoke.txt", contents: result.output)
     return .init(
         id: "live-provider-smoke",
         name: "Live Provider Smoke",
         families: [.providers],
-        status: .passed,
-        summary: "Ran a live Ollama-backed smoke check.",
-        evidence: [
-            .init(label: "live-output", detail: result.output, artifactPath: context.relativeArtifactPath(for: artifact)),
-        ]
+        status: .skipped,
+        summary: "Live provider smoke requires Apple Foundation Models on a supported platform."
     )
 }
+
 
 // MARK: - Fixtures
 
 @Tool("Adds two integers together.")
-private struct ShowcaseAdditionTool {
+struct ShowcaseAdditionTool {
     @Parameter("Left-hand value") var lhs: Int = 0
     @Parameter("Right-hand value") var rhs: Int = 0
 
@@ -974,7 +1039,7 @@ private struct GuardedEchoTool: AnyJSONTool {
     }
 }
 
-private actor ScriptedInferenceProvider: InferenceProvider {
+actor ScriptedInferenceProvider: InferenceProvider {
     private var responses: [String]
     private var toolCallResponses: [InferenceResponse]
     private var responseIndex = 0
@@ -994,6 +1059,10 @@ private actor ScriptedInferenceProvider: InferenceProvider {
     func generate(prompt: String, options: InferenceOptions) async throws -> String {
         generateCalls.append((prompt, options))
         return nextTextResponse()
+    }
+
+    func generate(messages: [InferenceMessage], options: InferenceOptions) async throws -> String {
+        try await generate(prompt: InferenceMessage.flattenPrompt(messages), options: options)
     }
 
     nonisolated func stream(prompt: String, options: InferenceOptions) -> AsyncThrowingStream<String, Error> {
@@ -1024,6 +1093,20 @@ private actor ScriptedInferenceProvider: InferenceProvider {
             return response
         }
         return InferenceResponse(content: nextTextResponse(), finishReason: .completed)
+    }
+
+    func generateWithToolCalls(
+        messages: [InferenceMessage],
+        tools: [ToolSchema],
+        options: InferenceOptions,
+        toolExecutor: ToolCallExecutor?
+    ) async throws -> InferenceResponse {
+        _ = toolExecutor
+        return try await generateWithToolCalls(
+            prompt: InferenceMessage.flattenPrompt(messages),
+            tools: tools,
+            options: options
+        )
     }
 
     func generatePrompts() -> [String] {
@@ -1077,7 +1160,7 @@ private actor AttemptCounter {
     }
 }
 
-private actor ShowcaseMCPServer: MCPServer {
+private actor ShowcaseMCPServer: MCPServerConnection {
     let name: String
     private var schemas: [ToolSchema] = []
     private var serverCapabilities: MCPCapabilities
@@ -1127,7 +1210,7 @@ private func makeTextAgent(output: String) -> Agent {
     return try! Agent("Return deterministic output.", memory: makeScenarioMemory(), inferenceProvider: provider)
 }
 
-private func makeScenarioMemory() -> any Memory {
+func makeScenarioMemory() -> any Memory {
     ConversationMemory(maxMessages: 32)
 }
 
@@ -1176,7 +1259,7 @@ private func writeWorkspaceFixture(at root: URL) throws {
     )
 }
 
-private func ensure(_ condition: Bool, _ message: String) throws {
+func ensure(_ condition: Bool, _ message: String) throws {
     guard condition else {
         throw CapabilityShowcaseError.expectationFailed(message)
     }

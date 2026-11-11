@@ -1,44 +1,43 @@
-import CryptoKit
 import Foundation
 
-public enum SwarmTranscriptSchemaVersion: String, Codable, Sendable, Equatable {
+enum SwarmTranscriptSchemaVersion: String, Codable, Sendable, Equatable {
     case v1 = "STS1"
 
-    public static let current: SwarmTranscriptSchemaVersion = .v1
+    static let current: SwarmTranscriptSchemaVersion = .v1
 }
 
-public struct SwarmTranscriptToolCall: Codable, Sendable, Equatable {
-    public let id: String?
-    public let name: String
-    public let arguments: [String: SendableValue]
+struct SwarmTranscriptToolCall: Codable, Sendable, Equatable {
+    let id: String?
+    let name: String
+    let arguments: [String: SendableValue]
 
-    public init(id: String?, name: String, arguments: [String: SendableValue]) {
+    init(id: String?, name: String, arguments: [String: SendableValue]) {
         self.id = id
         self.name = name
         self.arguments = arguments
     }
 }
 
-public struct SwarmTranscriptStructuredOutput: Codable, Sendable, Equatable {
-    public let result: StructuredOutputResult
+struct SwarmTranscriptStructuredOutput: Codable, Sendable, Equatable {
+    let result: StructuredOutputResult
 
-    public init(result: StructuredOutputResult) {
+    init(result: StructuredOutputResult) {
         self.result = result
     }
 }
 
-public struct SwarmTranscriptEntry: Codable, Sendable, Equatable {
-    public let messageID: UUID
-    public let role: MemoryMessage.Role
-    public let content: String
-    public let timestamp: Date
-    public let metadata: [String: String]
-    public let toolName: String?
-    public let toolCallID: String?
-    public let toolCalls: [SwarmTranscriptToolCall]
-    public let structuredOutput: SwarmTranscriptStructuredOutput?
+struct SwarmTranscriptEntry: Codable, Sendable, Equatable {
+    let messageID: UUID
+    let role: MemoryMessage.Role
+    let content: String
+    let timestamp: Date
+    let metadata: [String: String]
+    let toolName: String?
+    let toolCallID: String?
+    let toolCalls: [SwarmTranscriptToolCall]
+    let structuredOutput: SwarmTranscriptStructuredOutput?
 
-    public init(
+    init(
         messageID: UUID,
         role: MemoryMessage.Role,
         content: String,
@@ -61,17 +60,17 @@ public struct SwarmTranscriptEntry: Codable, Sendable, Equatable {
     }
 }
 
-public enum SwarmTranscriptReplayCompatibilityError: Error, Sendable, Equatable {
+enum SwarmTranscriptReplayCompatibilityError: Error, Sendable, Equatable {
     case incompatibleSchemaVersion(expected: SwarmTranscriptSchemaVersion, found: SwarmTranscriptSchemaVersion)
 }
 
-public struct SwarmTranscriptDiff: Sendable, Equatable {
-    public let entryIndex: Int
-    public let keyPath: String
-    public let lhs: String
-    public let rhs: String
+struct SwarmTranscriptDiff: Sendable, Equatable {
+    let entryIndex: Int
+    let keyPath: String
+    let lhs: String
+    let rhs: String
 
-    public init(entryIndex: Int, keyPath: String, lhs: String, rhs: String) {
+    init(entryIndex: Int, keyPath: String, lhs: String, rhs: String) {
         self.entryIndex = entryIndex
         self.keyPath = keyPath
         self.lhs = lhs
@@ -79,11 +78,11 @@ public struct SwarmTranscriptDiff: Sendable, Equatable {
     }
 }
 
-public struct SwarmTranscript: Codable, Sendable, Equatable {
-    public let schemaVersion: SwarmTranscriptSchemaVersion
-    public let entries: [SwarmTranscriptEntry]
+struct SwarmTranscript: Codable, Sendable, Equatable {
+    let schemaVersion: SwarmTranscriptSchemaVersion
+    let entries: [SwarmTranscriptEntry]
 
-    public init(
+    init(
         schemaVersion: SwarmTranscriptSchemaVersion = .current,
         entries: [SwarmTranscriptEntry]
     ) {
@@ -91,12 +90,12 @@ public struct SwarmTranscript: Codable, Sendable, Equatable {
         self.entries = entries
     }
 
-    public init(memoryMessages: [MemoryMessage]) {
+    init(memoryMessages: [MemoryMessage]) {
         self.schemaVersion = .current
         self.entries = memoryMessages.map { SwarmTranscriptCodec.decodeEntry(from: $0) }
     }
 
-    public func validateReplayCompatibility(
+    func validateReplayCompatibility(
         expected: SwarmTranscriptSchemaVersion = .current
     ) throws {
         guard schemaVersion == expected else {
@@ -107,18 +106,17 @@ public struct SwarmTranscript: Codable, Sendable, Equatable {
         }
     }
 
-    public func stableData() throws -> Data {
+    func stableData() throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(self)
     }
 
-    public func transcriptHash() throws -> String {
-        let digest = SHA256.hash(data: try stableData())
-        return digest.map { String(format: "%02x", $0) }.joined()
+    func transcriptHash() throws -> String {
+        SwarmSHA256.hex(try stableData())
     }
 
-    public func firstDiff(comparedTo other: SwarmTranscript) -> SwarmTranscriptDiff? {
+    func firstDiff(comparedTo other: SwarmTranscript) -> SwarmTranscriptDiff? {
         if schemaVersion != other.schemaVersion {
             return SwarmTranscriptDiff(
                 entryIndex: 0,
@@ -154,6 +152,25 @@ public struct SwarmTranscript: Codable, Sendable, Equatable {
 }
 
 enum SwarmTranscriptCodec {
+    static func encode(_ message: InferenceMessage) -> MemoryMessage {
+        let role: MemoryMessage.Role = switch message.role {
+        case .system: .system
+        case .user: .user
+        case .assistant: .assistant
+        case .tool: .tool
+        }
+        let toolCalls = message.toolCalls.map {
+            InferenceResponse.ParsedToolCall(id: $0.id, name: $0.name, arguments: $0.arguments)
+        }
+        return encodeMessage(
+            role: role,
+            content: message.content,
+            toolName: message.name,
+            toolCallID: message.toolCallID,
+            toolCalls: toolCalls
+        )
+    }
+
     static let schemaVersionKey = "swarm.transcript.schema_version"
     static let entryIDKey = "swarm.transcript.entry_id"
     static let toolCallsKey = "swarm.transcript.tool_calls_json"
@@ -164,8 +181,8 @@ enum SwarmTranscriptCodec {
     static func encodeMessage(
         role: MemoryMessage.Role,
         content: String,
-        timestamp: Date = Date(),
-        messageID: UUID = UUID(),
+        timestamp: Date = TurnEnvironment.live.now(),
+        messageID: UUID = TurnEnvironment.live.newUUID(),
         metadata: [String: String] = [:],
         toolName: String? = nil,
         toolCallID: String? = nil,

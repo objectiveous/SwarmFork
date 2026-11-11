@@ -26,16 +26,17 @@ struct MyApp {
         let inferenceProvider: any InferenceProvider
         #if canImport(FoundationModels)
         if #available(macOS 26.0, *), SystemLanguageModel.default.availability == .available {
-            let session = LanguageModelSession()
             print("✅ Using Apple Foundation Models (on-device)")
-            inferenceProvider = session
+            inferenceProvider = FoundationModelsInferenceProvider()
         } else {
-            print("⚠️ Foundation Models not available, falling back to Ollama Cloud")
-            inferenceProvider = LLM.ollama("gpt-oss:120b-cloud")
+            print("❌ Apple Foundation Models are unavailable. Swarm's only built-in backend is Foundation Models.")
+            print("   Inject a custom InferenceProvider for other backends.")
+            return
         }
         #else
-        print("⚠️ Foundation Models not supported on this platform, using Ollama Cloud")
-        inferenceProvider = LLM.ollama("gpt-oss:120b-cloud")
+        print("❌ Foundation Models not supported on this platform.")
+        print("   Inject a custom InferenceProvider for other backends.")
+        return
         #endif
 
         // MARK: - Tools: built-in only (no API keys required)
@@ -167,40 +168,3 @@ struct MyApp {
         }
     }
 }
-
-// Proper InferenceProvider conformance for LanguageModelSession
-#if canImport(AnyLanguageModel) && SWARM_DEMO_ANYLANGUAGEMODEL
-extension LanguageModelSession: InferenceProvider {
-    public func generate(prompt: String, options _: InferenceOptions) async throws -> String {
-        let response = try await respond(to: prompt)
-        return response.content
-    }
-
-    public func stream(prompt: String, options _: InferenceOptions) -> AsyncThrowingStream<String, Error> {
-        AsyncThrowingStream { continuation in
-            Task {
-                do {
-                    let response = try await respond(to: prompt)
-                    continuation.yield(response.content)
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-        }
-    }
-
-    public func generateWithToolCalls(
-        prompt: String,
-        tools _: [ToolSchema],
-        options _: InferenceOptions
-    ) async throws -> InferenceResponse {
-        let response = try await respond(to: prompt)
-        return InferenceResponse(
-            content: response.content,
-            toolCalls: [],
-            finishReason: .completed
-        )
-    }
-}
-#endif

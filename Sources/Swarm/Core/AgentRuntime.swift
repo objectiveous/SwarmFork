@@ -110,6 +110,28 @@ public protocol AgentRuntime: Sendable {
         session: (any Session)?,
         observer: (any AgentObserver)?
     ) async throws -> AgentResponse
+
+    /// Handles a handoff from another agent.
+    ///
+    /// The default implementation filters reserved keys from `request.context`
+    /// (`auth`, `user_id`, `authorization`, `session`, `internal.` prefixes),
+    /// writes `handoff_source` and optional `handoff_reason`, records
+    /// execution, and calls ``run(_:session:observer:)``.
+    ///
+    /// - Parameters:
+    ///   - request: The handoff request containing input and context.
+    ///   - context: The shared orchestration context.
+    ///   - session: Optional nested conversation history for `.nested` /
+    ///     `.summarized` handoff history.
+    ///   - observer: Optional observer for lifecycle callbacks.
+    /// - Returns: The result of handling the handoff.
+    /// - Throws: `AgentError` if execution fails.
+    func handleHandoff(
+        _ request: HandoffRequest,
+        context: AgentContext,
+        session: (any Session)?,
+        observer: (any AgentObserver)?
+    ) async throws -> AgentResult
 }
 
 // MARK: - LegacyAgent Protocol Extensions
@@ -135,6 +157,33 @@ public extension AgentRuntime {
 
     /// Default handoffs (none).
     nonisolated var handoffs: [AnyHandoffConfiguration] { [] }
+
+    /// Default handoff handling shared by coordinator and in-loop dispatch.
+    ///
+    /// Merges filtered `request.context`, records provenance, then runs the
+    /// agent with the supplied session and observer.
+    func handleHandoff(
+        _ request: HandoffRequest,
+        context: AgentContext,
+        session: (any Session)?,
+        observer: (any AgentObserver)?
+    ) async throws -> AgentResult {
+        for (key, value) in HandoffContextFilter.allowedValues(request.context) {
+            await context.set(key, value: value)
+        }
+
+        await context.set(
+            "handoff_source",
+            value: .string(request.sourceAgentName)
+        )
+
+        if let reason = request.reason {
+            await context.set("handoff_reason", value: .string(reason))
+        }
+
+        await context.recordExecution(agentName: request.targetAgentName)
+        return try await run(request.input, session: session, observer: observer)
+    }
 }
 
 // MARK: - Agent Convenience Extensions
@@ -167,37 +216,10 @@ public extension AgentRuntime {
         observer: (any AgentObserver)? = nil
     ) async throws -> AgentResponse {
         let result = try await run(input, session: session, observer: observer)
-
-        // Use reduce(into:) instead of uniqueKeysWithValues to avoid crash on duplicate IDs
-        let toolCallsById = result.toolCalls.reduce(into: [UUID: ToolCall]()) { dict, call in
-            dict[call.id] = call
-        }
-
-        let toolCallRecords: [ToolCallRecord] = result.toolResults.compactMap { toolResult in
-            guard let toolCall = toolCallsById[toolResult.callId] else {
-                Log.agents.warning("Tool result missing matching call: \(toolResult.callId)")
-                return nil
-            }
-            return ToolCallRecord(
-                toolName: toolCall.toolName,
-                arguments: toolCall.arguments,
-                result: toolResult.output,
-                duration: toolResult.duration,
-                timestamp: toolCall.timestamp,
-                isSuccess: toolResult.isSuccess,
-                errorMessage: toolResult.errorMessage
-            )
-        }
-
-        return AgentResponse(
-            responseId: UUID().uuidString,
-            output: result.output,
-            agentName: configuration.name,
-            timestamp: Date(),
-            metadata: result.metadata,
-            toolCalls: toolCallRecords,
-            usage: result.tokenUsage,
-            iterationCount: result.iterationCount
+        return AgentResponseProjection.make(
+            from: result,
+            responseID: TurnEnvironment.live.newID(),
+            agentName: configuration.name
         )
     }
 
@@ -216,36 +238,131 @@ public extension AgentRuntime {
 ///
 /// Inference providers abstract the underlying language model, allowing
 /// agents to work with different model backends (Foundation Models,
-/// AnyLanguageModel, Conduit SDK, etc.).
+/// custom backends, or third-party SDKs).
 ///
 public protocol InferenceProvider: Sendable {
+    /// Advertised features. Callers read this bitset; they do not probe extra protocols.
+    var capabilities: InferenceProviderCapabilities { get }
+
+    /// Native prompt token counter for this backend, if any.
+    ///
+    /// Agent reads this property when wiring ``AgentEnvironment/promptTokenCounter``.
+    /// The default is `nil`, which keeps the environment heuristic counter.
+    var promptTokenCounter: (any PromptTokenCounter)? { get }
+
     /// Generates a response for the given prompt.
-    /// - Parameters:
-    ///   - prompt: The input prompt.
-    ///   - options: Generation options.
-    /// - Returns: The generated text.
-    /// - Throws: `AgentError` if generation fails.
+    ///
+    /// Deprecated as the Agent seam. The protocol default wraps `prompt` as
+    /// ``InferenceMessage/user(_:)``. Prefer ``generate(messages:options:)``.
     func generate(prompt: String, options: InferenceOptions) async throws -> String
 
     /// Streams a response for the given prompt.
-    /// - Parameters:
-    ///   - prompt: The input prompt.
-    ///   - options: Generation options.
-    /// - Returns: An async stream of response tokens.
+    ///
+    /// Deprecated as the Agent seam. The protocol default wraps `prompt` as
+    /// ``InferenceMessage/user(_:)``. Prefer ``stream(messages:options:)``.
     func stream(prompt: String, options: InferenceOptions) -> AsyncThrowingStream<String, Error>
 
-    /// Generates a response with potential tool calls.
-    /// - Parameters:
-    ///   - prompt: The input prompt.
-    ///   - tools: Available tool schemas.
-    ///   - options: Generation options.
-    /// - Returns: The inference response which may include tool calls.
-    /// - Throws: `AgentError` if generation fails.
+    /// Generates a response with potential tool calls from a flattened prompt.
+    ///
+    /// Deprecated as the Agent seam. The protocol default wraps `prompt` as
+    /// ``InferenceMessage/user(_:)``. Prefer
+    /// ``generateWithToolCalls(messages:tools:options:toolExecutor:)``.
     func generateWithToolCalls(
         prompt: String,
         tools: [ToolSchema],
         options: InferenceOptions
     ) async throws -> InferenceResponse
+
+    /// Streams text and tool-call updates from a flattened prompt.
+    ///
+    /// Deprecated as the Agent seam. Prefer ``streamWithToolCalls(messages:tools:options:)``.
+    /// The protocol default generate-then-emits a finished turn. Override to stream
+    /// partial tool-call assembly, and advertise
+    /// ``InferenceProviderCapabilities/streamingToolCalls``.
+    func streamWithToolCalls(
+        prompt: String,
+        tools: [ToolSchema],
+        options: InferenceOptions
+    ) -> AsyncThrowingStream<InferenceStreamUpdate, Error>
+
+    /// Generates structured output from a flattened prompt.
+    ///
+    /// Deprecated as the Agent seam. Prefer
+    /// ``generateStructured(messages:request:options:)``.
+    func generateStructured(
+        prompt: String,
+        request: StructuredOutputRequest,
+        options: InferenceOptions
+    ) async throws -> StructuredOutputResult
+
+    /// Generates a response from role-tagged conversation messages.
+    func generate(messages: [InferenceMessage], options: InferenceOptions) async throws -> String
+
+    /// Streams a response from role-tagged conversation messages.
+    func stream(
+        messages: [InferenceMessage],
+        options: InferenceOptions
+    ) -> AsyncThrowingStream<String, Error>
+
+    /// Generates a response with potential tool calls from role-tagged messages.
+    ///
+    /// The protocol default emulates tool calling via
+    /// ``generate(messages:options:)``. Adapters with native tool calling
+    /// override this method. If the native path is the four-argument method,
+    /// forward this overload to it — otherwise three-argument callers hit
+    /// emulation. Do not implement this default by calling the four-argument
+    /// overload; that pair recurses when neither is overridden.
+    func generateWithToolCalls(
+        messages: [InferenceMessage],
+        tools: [ToolSchema],
+        options: InferenceOptions
+    ) async throws -> InferenceResponse
+
+    /// Generates a response with potential tool calls, supplying tool execution
+    /// for a provider-owned tool loop.
+    ///
+    /// Capture adapters ignore `toolExecutor`. An adapter that advertises
+    /// ``InferenceProviderCapabilities/providerOwnedToolLoop`` must implement
+    /// this overload and requires a non-nil executor. The protocol default
+    /// throws ``AgentError/providerOwnedToolLoopRequiresExecutor`` when the
+    /// bit is set, even if an executor was passed — override rather than
+    /// forwarding to the three-argument method.
+    func generateWithToolCalls(
+        messages: [InferenceMessage],
+        tools: [ToolSchema],
+        options: InferenceOptions,
+        toolExecutor: ToolCallExecutor?
+    ) async throws -> InferenceResponse
+
+    /// Streams text and tool-call updates from role-tagged messages.
+    ///
+    /// The protocol default calls
+    /// ``streamWithToolCalls(messages:tools:options:toolExecutor:)`` with
+    /// `toolExecutor` `nil`.
+    func streamWithToolCalls(
+        messages: [InferenceMessage],
+        tools: [ToolSchema],
+        options: InferenceOptions
+    ) -> AsyncThrowingStream<InferenceStreamUpdate, Error>
+
+    /// Streams text and tool-call updates, supplying tool execution for a
+    /// provider-owned tool loop.
+    ///
+    /// Same contract as
+    /// ``generateWithToolCalls(messages:tools:options:toolExecutor:)``.
+    func streamWithToolCalls(
+        messages: [InferenceMessage],
+        tools: [ToolSchema],
+        options: InferenceOptions,
+        toolExecutor: ToolCallExecutor?
+    ) -> AsyncThrowingStream<InferenceStreamUpdate, Error>
+
+    /// Generates structured output from role-tagged messages.
+    func generateStructured(
+        messages: [InferenceMessage],
+        request: StructuredOutputRequest,
+        options: InferenceOptions
+    ) async throws -> StructuredOutputResult
 }
 
 // MARK: - InferenceOptions
@@ -262,7 +379,6 @@ public protocol InferenceProvider: Sendable {
 ///     .maxTokens(2000)
 ///     .stopSequences("END", "STOP")
 /// ```
-@Builder
 public struct InferenceOptions: Sendable, Equatable {
     /// Default inference options.
     public static let `default` = InferenceOptions()
@@ -351,6 +467,14 @@ public struct InferenceOptions: Sendable, Equatable {
     /// unbounded — see one-fhx.
     public var reasoning: ReasoningConfig?
 
+    /// Conversation key for a provider-owned tool loop session store.
+    ///
+    /// Agent sets this from the run's Session id, or a fresh identifier when
+    /// the run has no Session. Capture adapters ignore it. Direct callers of
+    /// an owned-loop adapter should set this so native sessions are not shared
+    /// across unrelated conversations.
+    public var conversationId: String?
+
     /// Creates inference options.
     /// - Parameters:
     ///   - temperature: Generation temperature. Default: 1.0
@@ -402,6 +526,129 @@ public struct InferenceOptions: Sendable, Equatable {
         self.previousResponseId = previousResponseId
         self.structuredOutput = structuredOutput
         self.reasoning = reasoning
+        self.conversationId = nil
+    }
+
+    // MARK: - Fluent Builders
+
+    @discardableResult
+    public func temperature(_ value: Double) -> Self {
+        var copy = self
+        copy.temperature = value
+        return copy
+    }
+
+    @discardableResult
+    public func maxTokens(_ value: Int?) -> Self {
+        var copy = self
+        copy.maxTokens = value
+        return copy
+    }
+
+    @discardableResult
+    public func stopSequences(_ value: [String]) -> Self {
+        var copy = self
+        copy.stopSequences = value
+        return copy
+    }
+
+    @discardableResult
+    public func topP(_ value: Double?) -> Self {
+        var copy = self
+        copy.topP = value
+        return copy
+    }
+
+    @discardableResult
+    public func topK(_ value: Int?) -> Self {
+        var copy = self
+        copy.topK = value
+        return copy
+    }
+
+    @discardableResult
+    public func presencePenalty(_ value: Double?) -> Self {
+        var copy = self
+        copy.presencePenalty = value
+        return copy
+    }
+
+    @discardableResult
+    public func frequencyPenalty(_ value: Double?) -> Self {
+        var copy = self
+        copy.frequencyPenalty = value
+        return copy
+    }
+
+    @discardableResult
+    public func toolChoice(_ value: ToolChoice?) -> Self {
+        var copy = self
+        copy.toolChoice = value
+        return copy
+    }
+
+    @discardableResult
+    public func seed(_ value: Int?) -> Self {
+        var copy = self
+        copy.seed = value
+        return copy
+    }
+
+    @discardableResult
+    public func parallelToolCalls(_ value: Bool?) -> Self {
+        var copy = self
+        copy.parallelToolCalls = value
+        return copy
+    }
+
+    @discardableResult
+    public func truncation(_ value: TruncationStrategy?) -> Self {
+        var copy = self
+        copy.truncation = value
+        return copy
+    }
+
+    @discardableResult
+    public func verbosity(_ value: Verbosity?) -> Self {
+        var copy = self
+        copy.verbosity = value
+        return copy
+    }
+
+    @discardableResult
+    public func providerSettings(_ value: [String: SendableValue]?) -> Self {
+        var copy = self
+        copy.providerSettings = value
+        return copy
+    }
+
+    @discardableResult
+    public func previousResponseId(_ value: String?) -> Self {
+        var copy = self
+        copy.previousResponseId = value
+        return copy
+    }
+
+    /// Sets the conversation key for a provider-owned tool loop session store.
+    @discardableResult
+    public func conversationId(_ value: String?) -> Self {
+        var copy = self
+        copy.conversationId = value
+        return copy
+    }
+
+    @discardableResult
+    public func structuredOutput(_ value: StructuredOutputRequest?) -> Self {
+        var copy = self
+        copy.structuredOutput = value
+        return copy
+    }
+
+    @discardableResult
+    public func reasoning(_ value: ReasoningConfig?) -> Self {
+        var copy = self
+        copy.reasoning = value
+        return copy
     }
 
     // MARK: - Special Builder Methods
@@ -474,15 +721,25 @@ public struct InferenceResponse: Sendable, Equatable {
         /// The arguments for the tool.
         public let arguments: [String: SendableValue]
 
+        /// Provider thought signature (Gemini thinking models). Echoed back verbatim.
+        public let thoughtSignature: String?
+
         /// Creates a parsed tool call.
         /// - Parameters:
         ///   - id: Unique identifier for the tool call. Default: nil
         ///   - name: The tool name.
         ///   - arguments: The tool arguments.
-        public init(id: String? = nil, name: String, arguments: [String: SendableValue]) {
+        ///   - thoughtSignature: Provider thought signature. Default: nil
+        public init(
+            id: String? = nil,
+            name: String,
+            arguments: [String: SendableValue],
+            thoughtSignature: String? = nil
+        ) {
             self.id = id
             self.name = name
             self.arguments = arguments
+            self.thoughtSignature = thoughtSignature
         }
     }
 
@@ -498,6 +755,13 @@ public struct InferenceResponse: Sendable, Equatable {
     /// Token usage statistics, if available.
     public let usage: TokenUsage?
 
+    /// Inner transcript of a finished provider-owned tool loop.
+    ///
+    /// Empty when the adapter only returned text or tool-call requests. Agent
+    /// maps these ``InferenceMessage`` values onto Session instead of
+    /// synthesizing a single assistant turn.
+    public let transcriptMessages: [InferenceMessage]
+
     /// Whether this response includes tool calls.
     public var hasToolCalls: Bool {
         !toolCalls.isEmpty
@@ -509,15 +773,18 @@ public struct InferenceResponse: Sendable, Equatable {
     ///   - toolCalls: Tool calls. Default: []
     ///   - finishReason: Finish reason. Default: .completed
     ///   - usage: Token usage statistics. Default: nil
+    ///   - transcriptMessages: Provider-owned turn transcript. Default: []
     public init(
         content: String? = nil,
         toolCalls: [ParsedToolCall] = [],
         finishReason: FinishReason = .completed,
-        usage: TokenUsage? = nil
+        usage: TokenUsage? = nil,
+        transcriptMessages: [InferenceMessage] = []
     ) {
         self.content = content
         self.toolCalls = toolCalls
         self.finishReason = finishReason
         self.usage = usage
+        self.transcriptMessages = transcriptMessages
     }
 }

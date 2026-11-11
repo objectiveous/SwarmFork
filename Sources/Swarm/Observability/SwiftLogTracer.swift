@@ -40,10 +40,10 @@ public actor SwiftLogTracer: Tracer {
     ///
     /// - Parameters:
     ///   - label: The logger label (default: "com.swarm.tracer")
-    ///   - minimumLevel: The minimum event level to log (default: .debug)
+    ///   - minimumLevel: The minimum event level to log (default: .info)
     public init(
         label: String = "com.swarm.tracer",
-        minimumLevel: EventLevel = .debug
+        minimumLevel: EventLevel = .info
     ) {
         logger = Logger(label: label)
         self.minimumLevel = minimumLevel
@@ -94,7 +94,7 @@ public actor SwiftLogTracer: Tracer {
             parts.append("tool=\(toolName)")
         }
 
-        parts.append(event.message)
+        parts.append(TraceEventPublicLogSanitizer.message(for: event))
 
         if let duration = event.duration {
             parts.append("(\(String(format: "%.2f", duration * 1000))ms)")
@@ -121,7 +121,7 @@ public actor SwiftLogTracer: Tracer {
         }
 
         // Extract stepNumber from metadata if present
-        if let stepNumber = event.metadata["stepNumber"]?.intValue {
+        if let stepNumber = event.metadata[.stepNumber] {
             metadata["step"] = "\(stepNumber)"
         }
 
@@ -130,7 +130,7 @@ public actor SwiftLogTracer: Tracer {
         }
 
         // Extract tokenCount from metadata if present
-        if let tokenCount = event.metadata["tokenCount"]?.intValue {
+        if let tokenCount = event.metadata[.legacyTokenCount] {
             metadata["tokens"] = "\(tokenCount)"
         }
 

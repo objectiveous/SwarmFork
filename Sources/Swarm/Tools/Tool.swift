@@ -9,9 +9,10 @@ import Foundation
 
 /// The type-erased wire protocol for tool execution.
 ///
-/// `AnyJSONTool` is the internal protocol used by `Agent` and `ToolRegistry` to execute
-/// tools without knowing their concrete types. Most users should not conform to this
-/// protocol directly — use the ``Tool`` protocol with the `@Tool` macro instead.
+/// `AnyJSONTool` is the public type-erased capability used by `Agent`, `ToolRegistry`,
+/// and MCP bridges to execute tools without knowing their concrete types. Most users
+/// should author tools with the ``Tool`` protocol and `@Tool` macro; use this protocol
+/// directly for custom dynamic tools or interoperability adapters.
 ///
 /// The `@Tool` macro automatically generates conformance to `AnyJSONTool` through an
 /// adapter, including:
@@ -21,8 +22,12 @@ import Foundation
 ///
 /// ## When to Use `AnyJSONTool` Directly
 ///
-/// Only conform to this protocol directly if you need custom tool behavior
-/// that cannot be expressed with the macro:
+/// Conform directly when a tool is dynamic at runtime, comes from an interoperability
+/// layer such as MCP, or needs behavior that cannot be expressed with the macro.
+/// This is an advanced seam; the type-erased value is also what ``Agent/tools`` and
+/// public MCP discovery APIs exchange.
+///
+/// Example:
 ///
 /// ```swift
 /// struct CustomTool: AnyJSONTool {
@@ -41,11 +46,10 @@ import Foundation
 ///
 /// ## Protocol Requirements
 ///
-/// All requirements must be implemented to conform to `AnyJSONTool`:
-/// - ``name`` - Unique identifier for the tool
-/// - ``description`` - Human-readable description for the LLM
-/// - ``parameters`` - Schema for tool arguments
-/// - ``execute(arguments:)`` - The actual tool implementation
+/// A direct conformance supplies the tool name, description, parameter schema, and
+/// ``execute(arguments:)`` implementation. ``inputGuardrails``, ``outputGuardrails``,
+/// ``executionSemantics``, and ``isEnabled`` have safe defaults in the protocol
+/// extension and can be overridden when an advanced integration needs them.
 ///
 /// - SeeAlso: ``Tool``, ``ToolSchema``, ``ToolParameter``
 public protocol AnyJSONTool: Sendable {
@@ -131,7 +135,7 @@ public protocol AnyJSONTool: Sendable {
     /// - Parameter arguments: The arguments passed to the tool, keyed by parameter name.
     ///                        These are validated against ``parameters`` before this method is called.
     /// - Returns: The result of the tool execution as a `SendableValue`.
-    /// - Throws: ``AgentError/toolExecutionFailed`` for execution failures,
+    /// - Throws: ``AgentError/toolFailure(toolName:message:cause:)`` for execution failures,
     ///          ``AgentError/invalidToolArguments`` for validation failures,
     ///          or any custom error from the tool implementation.
     ///
@@ -323,6 +327,11 @@ public extension AnyJSONTool {
 /// with dynamic tools in `ToolRegistry` and `Agent`.
 ///
 /// - SeeAlso: ``AnyJSONTool``, ``ToolParameter``, ``@Tool``
+/// - Important: Apple's FoundationModels framework also declares a public
+///   `Tool` protocol. When both modules are imported in the same file, qualify
+///   the type (`Swarm.Tool` vs `FoundationModels.Tool`) or prefer Swarm's
+///   `@Tool` macro / ``AnyJSONTool`` surface. Swarm bridges to Apple's
+///   protocol internally via ``FoundationModelsInferenceProvider``.
 public protocol Tool: Sendable {
     /// The input type for this tool.
     ///
@@ -405,314 +414,6 @@ public extension Tool {
             parameters: parameters,
             executionSemantics: executionSemantics
         )
-    }
-}
-
-// MARK: - ToolArgumentProcessor
-
-/// Shared argument validation + normalization logic for `AnyJSONTool`.
-private enum ToolArgumentProcessor {
-    // MARK: Internal
-
-    /// Maximum recursion depth for nested object/array parameters to prevent stack overflow.
-    static let maxDepth = 50
-
-    static func validate(
-        toolName: String,
-        parameters: [ToolParameter],
-        arguments: [String: SendableValue]
-    ) throws {
-        try validate(toolName: toolName, parameters: parameters, arguments: arguments, pathPrefix: nil, depth: 0)
-    }
-
-    static func normalize(
-        toolName: String,
-        parameters: [ToolParameter],
-        arguments: [String: SendableValue]
-    ) throws -> [String: SendableValue] {
-        try normalize(toolName: toolName, parameters: parameters, arguments: arguments, pathPrefix: nil, depth: 0)
-    }
-
-    // MARK: Private
-
-    private static func validate(
-        toolName: String,
-        parameters: [ToolParameter],
-        arguments: [String: SendableValue],
-        pathPrefix: String?,
-        depth: Int
-    ) throws {
-        guard depth < maxDepth else {
-            throw AgentError.invalidToolArguments(
-                toolName: toolName,
-                reason: "Maximum nesting depth (\(maxDepth)) exceeded at path: \(pathPrefix ?? "root")"
-            )
-        }
-
-        for param in parameters where param.isRequired {
-            guard arguments[param.name] != nil else {
-                let fullPath = join(pathPrefix, param.name)
-                throw AgentError.invalidToolArguments(
-                    toolName: toolName,
-                    reason: "Missing required parameter: \(fullPath)"
-                )
-            }
-        }
-
-        for param in parameters {
-            guard let value = arguments[param.name] else { continue }
-            let fullPath = join(pathPrefix, param.name)
-            try validateValue(toolName: toolName, value: value, expected: param.type, path: fullPath, depth: depth)
-        }
-    }
-
-    private static func normalize(
-        toolName: String,
-        parameters: [ToolParameter],
-        arguments: [String: SendableValue],
-        pathPrefix: String?,
-        depth: Int
-    ) throws -> [String: SendableValue] {
-        guard depth < maxDepth else {
-            throw AgentError.invalidToolArguments(
-                toolName: toolName,
-                reason: "Maximum nesting depth (\(maxDepth)) exceeded at path: \(pathPrefix ?? "root")"
-            )
-        }
-
-        var normalized = arguments
-
-        // Apply default values (also when model explicitly sends null)
-        for param in parameters {
-            let currentValue = normalized[param.name]
-            if currentValue == nil || currentValue == .null, let defaultValue = param.defaultValue {
-                normalized[param.name] = defaultValue
-            }
-        }
-
-        // Coerce known parameters to expected types
-        for param in parameters {
-            guard let value = normalized[param.name] else { continue }
-            let fullPath = join(pathPrefix, param.name)
-            normalized[param.name] = try coerceValue(toolName: toolName, value: value, expected: param.type, path: fullPath, depth: depth)
-        }
-
-        // Validate after applying defaults + coercion
-        try validate(toolName: toolName, parameters: parameters, arguments: normalized, pathPrefix: pathPrefix, depth: depth)
-        return normalized
-    }
-
-    private static func validateValue(
-        toolName: String,
-        value: SendableValue,
-        expected: ToolParameter.ParameterType,
-        path: String,
-        depth: Int = 0
-    ) throws {
-        switch expected {
-        case .any:
-            return
-
-        case .string:
-            guard case .string = value else {
-                throw invalidType(toolName: toolName, path: path, expected: expected, actual: value)
-            }
-
-        case .int:
-            switch value {
-            case .int:
-                return
-            case let .double(d) where d.truncatingRemainder(dividingBy: 1) == 0
-                && d >= Double(Int.min)
-                && d <= Double(Int.max):
-                return
-            default:
-                throw invalidType(toolName: toolName, path: path, expected: expected, actual: value)
-            }
-
-        case .double:
-            switch value {
-            case .double,
-                 .int:
-                return
-            default:
-                throw invalidType(toolName: toolName, path: path, expected: expected, actual: value)
-            }
-
-        case .bool:
-            guard case .bool = value else {
-                throw invalidType(toolName: toolName, path: path, expected: expected, actual: value)
-            }
-
-        case let .array(elementType):
-            guard case let .array(elements) = value else {
-                throw invalidType(toolName: toolName, path: path, expected: expected, actual: value)
-            }
-            for (index, element) in elements.enumerated() {
-                try validateValue(
-                    toolName: toolName,
-                    value: element,
-                    expected: elementType,
-                    path: "\(path)[\(index)]",
-                    depth: depth + 1
-                )
-            }
-
-        case let .object(properties):
-            guard case let .dictionary(dict) = value else {
-                throw invalidType(toolName: toolName, path: path, expected: expected, actual: value)
-            }
-            try validate(toolName: toolName, parameters: properties, arguments: dict, pathPrefix: path, depth: depth + 1)
-
-        case let .oneOf(options):
-            guard case let .string(s) = value else {
-                throw invalidType(toolName: toolName, path: path, expected: expected, actual: value)
-            }
-            guard options.contains(where: { $0.caseInsensitiveCompare(s) == .orderedSame }) else {
-                throw AgentError.invalidToolArguments(
-                    toolName: toolName,
-                    reason: "Invalid value for parameter: \(path). Expected oneOf(\(options.joined(separator: ", ")))"
-                )
-            }
-        }
-    }
-
-    private static func coerceValue(
-        toolName: String,
-        value: SendableValue,
-        expected: ToolParameter.ParameterType,
-        path: String,
-        depth: Int = 0
-    ) throws -> SendableValue {
-        switch expected {
-        case .any:
-            return value
-
-        case .string:
-            guard case .string = value else {
-                throw invalidType(toolName: toolName, path: path, expected: expected, actual: value)
-            }
-            return value
-
-        case .int:
-            switch value {
-            case .int:
-                return value
-            case let .double(d) where d.truncatingRemainder(dividingBy: 1) == 0
-                && d >= Double(Int.min)
-                && d <= Double(Int.max):
-                return .int(Int(d))
-            case let .string(s):
-                if let i = Int(s.trimmingCharacters(in: .whitespacesAndNewlines)) {
-                    return .int(i)
-                }
-                throw invalidType(toolName: toolName, path: path, expected: expected, actual: value)
-            default:
-                throw invalidType(toolName: toolName, path: path, expected: expected, actual: value)
-            }
-
-        case .double:
-            switch value {
-            case let .double(d):
-                return .double(d)
-            case let .int(i):
-                return .double(Double(i))
-            case let .string(s):
-                if let d = Double(s.trimmingCharacters(in: .whitespacesAndNewlines)) {
-                    return .double(d)
-                }
-                throw invalidType(toolName: toolName, path: path, expected: expected, actual: value)
-            default:
-                throw invalidType(toolName: toolName, path: path, expected: expected, actual: value)
-            }
-
-        case .bool:
-            switch value {
-            case .bool:
-                return value
-            case let .string(s):
-                switch s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-                case "true":
-                    return .bool(true)
-                case "false":
-                    return .bool(false)
-                default:
-                    throw invalidType(toolName: toolName, path: path, expected: expected, actual: value)
-                }
-            default:
-                throw invalidType(toolName: toolName, path: path, expected: expected, actual: value)
-            }
-
-        case let .array(elementType):
-            guard case let .array(elements) = value else {
-                throw invalidType(toolName: toolName, path: path, expected: expected, actual: value)
-            }
-            let coerced = try elements.enumerated().map { index, element in
-                try coerceValue(
-                    toolName: toolName,
-                    value: element,
-                    expected: elementType,
-                    path: "\(path)[\(index)]",
-                    depth: depth + 1
-                )
-            }
-            return .array(coerced)
-
-        case let .object(properties):
-            guard case let .dictionary(dict) = value else {
-                throw invalidType(toolName: toolName, path: path, expected: expected, actual: value)
-            }
-            let coerced = try normalize(toolName: toolName, parameters: properties, arguments: dict, pathPrefix: path, depth: depth + 1)
-            return .dictionary(coerced)
-
-        case let .oneOf(options):
-            guard case let .string(s) = value else {
-                throw invalidType(toolName: toolName, path: path, expected: expected, actual: value)
-            }
-            if let matched = options.first(where: { $0.caseInsensitiveCompare(s) == .orderedSame }) {
-                return .string(matched)
-            }
-            throw AgentError.invalidToolArguments(
-                toolName: toolName,
-                reason: "Invalid value for parameter: \(path). Expected oneOf(\(options.joined(separator: ", ")))"
-            )
-        }
-    }
-
-    private static func invalidType(
-        toolName: String,
-        path: String,
-        expected: ToolParameter.ParameterType,
-        actual: SendableValue
-    ) -> AgentError {
-        AgentError.invalidToolArguments(
-            toolName: toolName,
-            reason: "Invalid type for parameter: \(path). Expected \(expected.description), got \(jsonTypeDescription(actual))"
-        )
-    }
-
-    private static func join(_ prefix: String?, _ key: String) -> String {
-        guard let prefix, !prefix.isEmpty else { return key }
-        return "\(prefix).\(key)"
-    }
-
-    private static func jsonTypeDescription(_ value: SendableValue) -> String {
-        switch value {
-        case .null:
-            "null"
-        case .bool:
-            "boolean"
-        case .int:
-            "integer"
-        case .double:
-            "number"
-        case .string:
-            "string"
-        case .array:
-            "array"
-        case .dictionary:
-            "object"
-        }
     }
 }
 
@@ -1032,140 +733,80 @@ public struct ToolSchema: Sendable, Equatable {
     }
 }
 
-// MARK: - FunctionTool
+// MARK: - ToolArguments
 
-/// A closure-based tool for inline tool creation without dedicated structs.
+/// Types that ``ToolArguments/require(_:as:)`` and ``ToolArguments/optional(_:as:)``
+/// can extract from a tool-call argument dictionary.
 ///
-/// `FunctionTool` enables quick tool definition using closures, ideal for
-/// simple one-off tools that don't warrant a dedicated struct conforming to
-/// ``AnyJSONTool`` or ``Tool``.
+/// The built-in lattice is `String`, `Int`, `Double`, and `Bool`. The lattice is
+/// open: any `Sendable` type (such as `URL`) can conform by implementing
+/// ``extract(from:)``, and a conformance that omits the requirement fails at
+/// compile time. Decoding arbitrary `Decodable` payloads still uses
+/// unconstrained ``SendableValue/decode()``.
 ///
-/// ## Basic Usage
+/// ## Strict Extraction
 ///
-/// Create a tool with a simple closure:
-///
-/// ```swift
-/// let getWeather = FunctionTool(
-///     name: "get_weather",
-///     description: "Gets weather for a city"
-/// ) { args in
-///     let city = try args.require("city", as: String.self)
-///     return .string("72°F in \(city)")
-/// }
-/// ```
-///
-/// ## With Explicit Parameters
-///
-/// Define a schema for better LLM integration:
-///
-/// ```swift
-/// let search = FunctionTool(
-///     name: "search",
-///     description: "Search the web",
-///     parameters: [
-///         ToolParameter(name: "query", description: "Search query", type: .string),
-///         ToolParameter(
-///             name: "limit",
-///             description: "Max results",
-///             type: .int,
-///             isRequired: false,
-///             defaultValue: .int(10)
-///         )
-///     ]
-/// ) { args in
-///     let query = try args.require("query", as: String.self)
-///     let limit = args.int("limit", default: 10)
-///     // Perform search...
-///     return .array([.string("Result 1"), .string("Result 2")])
-/// }
-/// ```
-///
-/// ## Registration
-///
-/// Function tools can be registered like any other tool:
-///
-/// ```swift
-/// let registry = try ToolRegistry(tools: [getWeather, search])
-/// let result = try await registry.execute(
-///     toolNamed: "get_weather",
-///     arguments: ["city": .string("Paris")]
-/// )
-/// ```
-///
-/// - SeeAlso: ``ToolArguments``, ``AnyJSONTool``, ``ToolRegistry``
-public struct FunctionTool: AnyJSONTool, Sendable {
-    /// The unique name of the tool.
-    public let name: String
-
-    /// A description of what the tool does.
-    public let description: String
-
-    /// The parameters this tool accepts.
-    public let parameters: [ToolParameter]
-
-    /// Execution semantics for this tool.
-    public let executionSemantics: ToolExecutionSemantics
-
-    /// Creates a function tool with a closure handler.
+/// Extraction is exact-case with no coercion: `.int(1)` extracts as `Int` only,
+/// never as `Double`, and `.string("1")` never extracts as a number. Apply
+/// schema-driven coercion first with ``AnyJSONTool/normalizeArguments(_:)``
+/// (backed by `ToolArgumentProcessor`), then extract with ``ToolArguments``.
+/// That normalize-then-extract composition keeps LLM-input tolerance in the
+/// normalization layer and exactness in the handler layer.
+public protocol ToolArgumentValue: Sendable {
+    /// Extracts `Self` from a wire value, or returns `nil` when the case does not match.
     ///
-    /// - Parameters:
-    ///   - name: The unique name of the tool (used in tool calls).
-    ///   - description: A description of what the tool does (used in LLM prompts).
-    ///   - parameters: The parameters this tool accepts. Default: empty array.
-    ///   - executionSemantics: Runtime behavior configuration. Default: `.automatic`.
-    ///   - handler: The closure that implements the tool logic.
-    ///
-    /// ## Handler Closure
-    ///
-    /// The handler receives a ``ToolArguments`` wrapper providing convenient
-    /// access to the tool's arguments. It should return a `SendableValue`
-    /// representing the tool's output.
-    ///
-    /// ```swift
-    /// FunctionTool(name: "echo", description: "Echoes input") { args in
-    ///     let message = try args.require("message", as: String.self)
-    ///     return .string("Echo: \(message)")
-    /// }
-    /// ```
-    ///
-    /// - SeeAlso: ``ToolArguments``
-    public init(
-        name: String,
-        description: String,
-        parameters: [ToolParameter] = [],
-        executionSemantics: ToolExecutionSemantics = .automatic,
-        handler: @escaping @Sendable (ToolArguments) async throws -> SendableValue
-    ) {
-        self.name = name
-        self.description = description
-        self.parameters = parameters
-        self.executionSemantics = executionSemantics
-        self.handler = handler
-    }
-
-    /// Executes the tool with the given arguments.
-    ///
-    /// This method wraps the arguments in a ``ToolArguments`` struct and
-    /// invokes the handler closure.
-    ///
-    /// - Parameter arguments: The arguments dictionary from the tool call.
-    /// - Returns: The result from the handler closure.
-    /// - Throws: Any error thrown by the handler.
-    public func execute(arguments: [String: SendableValue]) async throws -> SendableValue {
-        try await handler(ToolArguments(arguments, toolName: name))
-    }
-
-    // MARK: Private
-
-    private let handler: @Sendable (ToolArguments) async throws -> SendableValue
+    /// Implementations must be exact-case (no numeric or string coercion); the
+    /// built-in conformances share the internal strict policy below.
+    static func extract(from value: SendableValue) -> Self?
 }
 
-// MARK: - ToolArguments
+/// Strict exact-case extraction shared by the built-in ``ToolArgumentValue`` conformances.
+///
+/// One policy serves all four lattice types: a value extracts only when its
+/// `SendableValue` case matches the requested type exactly.
+enum ToolArgumentExtraction {
+    static func extract<T>(_: T.Type, from value: SendableValue) -> T? {
+        let extracted: Any? = switch value {
+        case let .string(s) where T.self == String.self: s
+        case let .int(i) where T.self == Int.self: i
+        case let .double(d) where T.self == Double.self: d
+        case let .bool(b) where T.self == Bool.self: b
+        default: nil
+        }
+        return extracted as? T
+    }
+}
+
+extension String: ToolArgumentValue {
+    public static func extract(from value: SendableValue) -> String? {
+        ToolArgumentExtraction.extract(String.self, from: value)
+    }
+}
+
+extension Int: ToolArgumentValue {
+    public static func extract(from value: SendableValue) -> Int? {
+        ToolArgumentExtraction.extract(Int.self, from: value)
+    }
+}
+
+extension Double: ToolArgumentValue {
+    public static func extract(from value: SendableValue) -> Double? {
+        ToolArgumentExtraction.extract(Double.self, from: value)
+    }
+}
+
+extension Bool: ToolArgumentValue {
+    public static func extract(from value: SendableValue) -> Bool? {
+        ToolArgumentExtraction.extract(Bool.self, from: value)
+    }
+}
 
 /// A convenience wrapper for extracting typed values from tool arguments.
 ///
 /// `ToolArguments` provides a type-safe interface for accessing the raw
 /// `[String: SendableValue]` dictionary passed to tool execution.
+/// ``require(_:as:)`` and ``optional(_:as:)`` are generic over
+/// ``ToolArgumentValue`` only (built in: `String`, `Int`, `Double`, and `Bool`).
 ///
 /// ## Usage
 ///
@@ -1184,20 +825,26 @@ public struct FunctionTool: AnyJSONTool, Sendable {
     ///     // Arguments with defaults
 ///     let roundResult = args.string("round", default: "up")
 ///
-    ///     // Perform calculation...
+///     // Perform calculation...
 ///     return .double(result)
 /// }
 /// ```
 ///
 /// ## Type Support
 ///
-/// The following types are supported for extraction:
+/// Extraction is constrained to ``ToolArgumentValue``:
 /// - `String` - Extracts from `.string` values
 /// - `Int` - Extracts from `.int` values
 /// - `Double` - Extracts from `.double` values
 /// - `Bool` - Extracts from `.bool` values
 ///
-/// - SeeAlso: ``FunctionTool``
+/// Custom `Sendable` types can join the lattice by implementing
+/// ``ToolArgumentValue/extract(from:)``. Each accessor dispatches to that
+/// requirement: ``require(_:as:)`` throws when the key is missing or mistyped,
+/// ``optional(_:as:)`` returns `nil` in both cases, and
+/// ``optionalValue(_:as:)`` returns `nil` only when the key is missing.
+///
+/// - SeeAlso: ``FunctionTool``, ``ToolArgumentValue``
 public struct ToolArguments: Sendable {
     /// The raw arguments dictionary.
     public let raw: [String: SendableValue]
@@ -1215,14 +862,14 @@ public struct ToolArguments: Sendable {
         self.toolName = toolName
     }
 
-    /// Gets a required argument of the specified type.
+    /// Gets a required argument of the specified ``ToolArgumentValue`` type.
     ///
     /// - Parameters:
     ///   - key: The argument key.
-    ///   - type: The expected type (inferred by default).
+    ///   - type: The expected lattice type (inferred by default).
     /// - Returns: The typed value.
     /// - Throws: ``AgentError/invalidToolArguments`` if missing or wrong type.
-    public func require<T>(_ key: String, as type: T.Type = T.self) throws -> T {
+    public func require<T: ToolArgumentValue>(_ key: String, as type: T.Type = T.self) throws -> T {
         guard let value = raw[key] else {
             throw AgentError.invalidToolArguments(
                 toolName: toolName,
@@ -1230,15 +877,7 @@ public struct ToolArguments: Sendable {
             )
         }
 
-        let extracted: Any? = switch value {
-        case let .string(s) where type == String.self: s
-        case let .int(i) where type == Int.self: i
-        case let .double(d) where type == Double.self: d
-        case let .bool(b) where type == Bool.self: b
-        default: nil
-        }
-
-        guard let result = extracted as? T else {
+        guard let result = T.extract(from: value) else {
             throw AgentError.invalidToolArguments(
                 toolName: toolName,
                 reason: "Argument '\(key)' is not of type \(T.self)"
@@ -1247,21 +886,36 @@ public struct ToolArguments: Sendable {
         return result
     }
 
-    /// Gets an optional argument of the specified type.
+    /// Gets an optional argument of the specified ``ToolArgumentValue`` type.
     ///
     /// - Parameters:
     ///   - key: The argument key.
-    ///   - type: The expected type (inferred by default).
+    ///   - type: The expected lattice type (inferred by default).
     /// - Returns: The typed value, or `nil` if missing or wrong type.
-    public func optional<T>(_ key: String, as type: T.Type = T.self) -> T? {
+    public func optional<T: ToolArgumentValue>(_ key: String, as type: T.Type = T.self) -> T? {
         guard let value = raw[key] else { return nil }
-        return switch value {
-        case let .string(s) where type == String.self: s as? T
-        case let .int(i) where type == Int.self: i as? T
-        case let .double(d) where type == Double.self: d as? T
-        case let .bool(b) where type == Bool.self: b as? T
-        default: nil
+        return T.extract(from: value)
+    }
+
+    /// Gets an optional argument, throwing when a present value has the wrong type.
+    ///
+    /// Unlike ``optional(_:as:)``, which conflates "missing" and "mistyped" as
+    /// `nil`, this strict optional returns `nil` only when the key is absent.
+    ///
+    /// - Parameters:
+    ///   - key: The argument key.
+    ///   - type: The expected lattice type (inferred by default).
+    /// - Returns: The typed value, or `nil` if the key is missing.
+    /// - Throws: ``AgentError/invalidToolArguments`` if a present value has the wrong type.
+    public func optionalValue<T: ToolArgumentValue>(_ key: String, as type: T.Type = T.self) throws -> T? {
+        guard let value = raw[key] else { return nil }
+        guard let result = T.extract(from: value) else {
+            throw AgentError.invalidToolArguments(
+                toolName: toolName,
+                reason: "Argument '\(key)' is not of type \(T.self)"
+            )
         }
+        return result
     }
 
     /// Gets a string argument or returns the default.
@@ -1282,274 +936,5 @@ public struct ToolArguments: Sendable {
     /// - Returns: The integer value or default.
     public func int(_ key: String, default defaultValue: Int = 0) -> Int {
         raw[key]?.intValue ?? defaultValue
-    }
-}
-
-// MARK: - ToolRegistry
-
-/// Errors thrown by ``ToolRegistry`` operations.
-public enum ToolRegistryError: Error, Sendable {
-    /// Thrown when attempting to register a tool with a name that already exists.
-    case duplicateToolName(name: String)
-}
-
-/// A registry for managing available tools.
-///
-/// `ToolRegistry` provides thread-safe tool registration and lookup using Swift's
-/// actor isolation. Use it to manage the set of tools available to an agent.
-///
-/// ## Basic Usage
-///
-/// Create a registry with initial tools:
-///
-/// ```swift
-/// let registry = try ToolRegistry(tools: [
-///     DateTimeTool(),
-///     StringTool()
-/// ])
-/// ```
-///
-/// Or build one incrementally:
-///
-/// ```swift
-/// let registry = ToolRegistry()
-/// try await registry.register(WeatherTool())
-/// try await registry.register(CalculatorTool())
-/// ```
-///
-/// ## Tool Execution
-///
-/// Execute tools by name with arguments:
-///
-/// ```swift
-/// let result = try await registry.execute(
-///     toolNamed: "datetime",
-///     arguments: ["format": .string("iso8601")]
-/// )
-/// ```
-///
-/// ## Thread Safety
-///
-/// `ToolRegistry` is an actor, ensuring all operations are thread-safe.
-/// All mutating methods (`register`, `unregister`) and even read-only
-/// methods (`tool(named:)`, `allTools`) must be called with `await`.
-///
-/// - SeeAlso: ``AnyJSONTool``, ``Tool``
-public actor ToolRegistry {
-    /// Gets all registered tools.
-    ///
-    /// Includes both enabled and disabled tools. Use `schemas` for
-    /// a filtered list of only enabled tools suitable for LLM prompts.
-    public var allTools: [any AnyJSONTool] {
-        Array(tools.values)
-    }
-
-    /// Gets all tool names.
-    public var toolNames: [String] {
-        Array(tools.keys)
-    }
-
-    /// Gets tool schemas for all enabled tools.
-    ///
-    /// This is typically used to generate tool definitions for LLM providers,
-    /// as disabled tools should not be exposed to the model.
-    public var schemas: [ToolSchema] {
-        tools.values.filter(\.isEnabled).map(\.schema)
-    }
-
-    /// The number of registered tools.
-    public var count: Int {
-        tools.count
-    }
-
-    /// Creates an empty tool registry.
-    public init() {}
-
-    /// Creates a tool registry with the given tools.
-    ///
-    /// - Parameter tools: The initial tools to register.
-    /// - Throws: ``ToolRegistryError/duplicateToolName`` if a tool with the same name already exists.
-    public init(tools: [any AnyJSONTool]) throws {
-        try Self.validateUniqueToolNames(tools.map(\.name), existingNames: [])
-        for tool in tools {
-            self.tools[tool.name] = tool
-        }
-    }
-
-    /// Creates a tool registry with the given typed tools.
-    ///
-    /// - Parameter tools: The initial typed tools to register.
-    /// - Throws: ``ToolRegistryError/duplicateToolName`` if a tool with the same name already exists.
-    public init(tools: [some Tool]) throws {
-        try Self.validateUniqueToolNames(tools.map(\.name), existingNames: [])
-        for tool in tools {
-            let name = tool.name
-            self.tools[name] = AnyJSONToolAdapter(tool)
-        }
-    }
-
-    /// Registers a tool.
-    ///
-    /// - Parameter tool: The tool to register.
-    /// - Throws: ``ToolRegistryError/duplicateToolName`` if a tool with the same name already exists.
-    public func register(_ tool: any AnyJSONTool) throws {
-        guard tools[tool.name] == nil else {
-            throw ToolRegistryError.duplicateToolName(name: tool.name)
-        }
-        tools[tool.name] = tool
-    }
-
-    /// Registers a typed tool by bridging it to ``AnyJSONTool``.
-    ///
-    /// - Parameter tool: The typed tool to register.
-    /// - Throws: ``ToolRegistryError/duplicateToolName`` if a tool with the same name already exists.
-    public func register(_ tool: some Tool) throws {
-        let name = tool.name
-        guard tools[name] == nil else {
-            throw ToolRegistryError.duplicateToolName(name: name)
-        }
-        tools[name] = AnyJSONToolAdapter(tool)
-    }
-
-    /// Registers multiple typed tools.
-    ///
-    /// - Parameter newTools: The typed tools to register.
-    /// - Throws: ``ToolRegistryError/duplicateToolName`` if any tool name already exists.
-    public func register(_ newTools: [some Tool]) throws {
-        try Self.validateUniqueToolNames(newTools.map(\.name), existingNames: Set(tools.keys))
-        for tool in newTools {
-            let name = tool.name
-            tools[name] = AnyJSONToolAdapter(tool)
-        }
-    }
-
-    /// Registers multiple tools.
-    ///
-    /// - Parameter newTools: The tools to register.
-    /// - Throws: ``ToolRegistryError/duplicateToolName`` if any tool name already exists.
-    public func register(_ newTools: [any AnyJSONTool]) throws {
-        try Self.validateUniqueToolNames(newTools.map(\.name), existingNames: Set(tools.keys))
-        for tool in newTools {
-            tools[tool.name] = tool
-        }
-    }
-
-    /// Unregisters a tool by name.
-    ///
-    /// - Parameter name: The name of the tool to unregister.
-    /// - Note: Silently succeeds if no tool with that name exists.
-    public func unregister(named name: String) {
-        tools.removeValue(forKey: name)
-    }
-
-    /// Gets a tool by name.
-    ///
-    /// - Parameter name: The tool name.
-    /// - Returns: The tool, or `nil` if not found.
-    public func tool(named name: String) -> (any AnyJSONTool)? {
-        tools[name]
-    }
-
-    /// Returns true if a tool with the given name is registered.
-    ///
-    /// - Parameter name: The tool name.
-    /// - Returns: `true` if the tool exists (regardless of enabled state).
-    public func contains(named name: String) -> Bool {
-        tools[name] != nil
-    }
-
-    /// Executes a tool by name with the given arguments.
-    ///
-    /// This method handles the complete tool execution lifecycle:
-    /// 1. Looks up the tool by name
-    /// 2. Checks if the tool is enabled
-    /// 3. Normalizes arguments (applies defaults and type coercion)
-    /// 4. Runs input guardrails
-    /// 5. Executes the tool
-    /// 6. Runs output guardrails
-    ///
-    /// - Parameters:
-    ///   - name: The name of the tool to execute.
-    ///   - arguments: The arguments to pass to the tool.
-    ///   - agent: Optional agent executing the tool (for guardrail validation).
-    ///   - context: Optional agent context for guardrail validation.
-    ///   - observer: Optional observer for error reporting.
-    /// - Returns: The result of the tool execution.
-    /// - Throws: ``AgentError/toolNotFound`` if the tool doesn't exist or is disabled,
-    ///           ``AgentError/toolExecutionFailed`` if execution fails,
-    ///           ``GuardrailError`` if guardrails are triggered,
-    ///           or `CancellationError` if the task is cancelled.
-    public func execute(
-        toolNamed name: String,
-        arguments: [String: SendableValue],
-        agent: (any AgentRuntime)? = nil,
-        context: AgentContext? = nil,
-        observer: (any AgentObserver)? = nil
-    ) async throws -> SendableValue {
-        // Check for cancellation before proceeding
-        try Task.checkCancellation()
-
-        guard let tool = tools[name] else {
-            throw AgentError.toolNotFound(name: name)
-        }
-
-        guard tool.isEnabled else {
-            throw AgentError.toolNotFound(name: name)
-        }
-
-        // Normalize arguments (defaults + coercion) before guardrails/execution.
-        let normalizedArguments = try tool.normalizeArguments(arguments)
-
-        // Create a single GuardrailRunner instance for both input and output guardrails
-        let runner = GuardrailRunner()
-        let data = ToolGuardrailData(tool: tool, arguments: normalizedArguments, agent: agent, context: context)
-
-        do {
-            // Run input guardrails
-            if !tool.inputGuardrails.isEmpty {
-                _ = try await runner.runToolInputGuardrails(tool.inputGuardrails, data: data)
-            }
-
-            let result = try await tool.execute(arguments: normalizedArguments)
-
-            // Run output guardrails
-            if !tool.outputGuardrails.isEmpty {
-                _ = try await runner.runToolOutputGuardrails(tool.outputGuardrails, data: data, output: result)
-            }
-
-            return result
-        } catch {
-            // Notify observer for any error (guardrail, execution, or otherwise)
-            if let agent, let observer {
-                await observer.onError(context: context, agent: agent, error: error)
-            }
-
-            // Re-throw original error or wrap it
-            if let agentError = error as? AgentError {
-                throw agentError
-            } else if error is CancellationError {
-                throw error
-            } else if let guardrailError = error as? GuardrailError {
-                throw guardrailError
-            } else {
-                throw AgentError.toolExecutionFailed(
-                    toolName: name,
-                    underlyingError: error.localizedDescription
-                )
-            }
-        }
-    }
-
-    // MARK: Private
-
-    private var tools: [String: any AnyJSONTool] = [:]
-
-    private static func validateUniqueToolNames(_ names: [String], existingNames: Set<String>) throws {
-        var seen = existingNames
-        for name in names {
-            guard seen.insert(name).inserted else {
-                throw ToolRegistryError.duplicateToolName(name: name)
-            }
-        }
     }
 }

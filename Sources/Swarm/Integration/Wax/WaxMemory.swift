@@ -1,9 +1,10 @@
+#if SWARM_INTEGRATIONS
 import Foundation
 import Wax
 import WaxVectorSearch
 
 /// Wax-backed memory implementation using the public Memory API.
-public actor WaxMemory: Memory, MemoryPromptDescriptor, MemorySessionLifecycle {
+public actor WaxMemory: Memory {
     // MARK: Public
 
     /// Configuration for Wax memory behavior.
@@ -31,9 +32,22 @@ public actor WaxMemory: Memory, MemoryPromptDescriptor, MemorySessionLifecycle {
     public var count: Int { persistedMessages.count }
     public var isEmpty: Bool { persistedMessages.isEmpty }
 
-    public nonisolated let memoryPromptTitle: String
-    public nonisolated let memoryPromptGuidance: String?
-    public nonisolated let memoryPriority: MemoryPriorityHint = .primary
+    @available(*, deprecated, message: "Return memoryPromptMetadata instead.")
+    public nonisolated var memoryPromptTitle: String { configuration.promptTitle }
+
+    @available(*, deprecated, message: "Return memoryPromptMetadata instead.")
+    public nonisolated var memoryPromptGuidance: String? { configuration.promptGuidance }
+
+    @available(*, deprecated, message: "Return memoryPromptMetadata instead.")
+    public nonisolated var memoryPriority: MemoryPriorityHint { .primary }
+
+    public nonisolated var memoryPromptMetadata: MemoryPromptMetadata? {
+        MemoryPromptMetadata(
+            title: configuration.promptTitle,
+            guidance: configuration.promptGuidance,
+            priority: .primary
+        )
+    }
 
     /// Creates a Wax-backed memory store.
     /// - Parameters:
@@ -57,17 +71,24 @@ public actor WaxMemory: Memory, MemoryPromptDescriptor, MemorySessionLifecycle {
 
         var waxConfig = Wax.Memory.Config.default
         waxConfig.enableVectorSearch = embedder != nil && configuration.enableVectorSearch
-
         if let embedder {
             self.store = try await Wax.Memory(at: url, config: waxConfig, embedding: embedder)
         } else {
             self.store = try await Wax.Memory(at: url, config: waxConfig)
         }
 
+        // Wax owns the store file lifecycle; restrict it to owner-only on a
+        // best-effort basis without failing memory creation.
+        if FileManager.default.fileExists(atPath: url.path) {
+            do {
+                try SecureFileIO.harden(url)
+            } catch {
+                Log.memory.warning("WaxMemory: Failed to restrict store permissions at \(url.path): \(error.localizedDescription)")
+            }
+        }
+
         self.persistedMessages = loadedMessages
         self.persistedMessageIDs = Set(loadedMessages.map(\.id))
-        self.memoryPromptTitle = configuration.promptTitle
-        self.memoryPromptGuidance = configuration.promptGuidance
     }
 
     public func add(_ message: MemoryMessage) async {
@@ -104,18 +125,49 @@ public actor WaxMemory: Memory, MemoryPromptDescriptor, MemorySessionLifecycle {
         }
     }
 
+    public func context(for query: MemoryQuery) async -> String {
+        do {
+            let rag = try await store.search(query.text)
+            return formatRAGContext(rag, query: query)
+        } catch {
+            Log.memory.error("WaxMemory: Failed to recall context: \(error.localizedDescription)")
+            return ""
+        }
+    }
+
+    /// Ranked frame items for `query`. The caller applies
+    /// `MemoryPromptAssembly.limit`; budgets live with the caller.
+    func promptItems(for query: String) async -> [MemoryPromptItem] {
+        do {
+            let rag = try await store.search(query)
+            return rag.items.map { item in
+                MemoryPromptItem(text: formatRAGItem(item))
+            }
+        } catch {
+            Log.memory.error("WaxMemory: Failed to recall context: \(error.localizedDescription)")
+            return []
+        }
+    }
+
     public func allMessages() async -> [MemoryMessage] {
         persistedMessages
     }
 
     public func clear() async {
         generation += 1
+        // Close is best-effort: on platforms where the Wax backend cannot
+        // flush (Linux FTS5), a close failure must not pin the stale store.
         do {
             try await store.close()
+        } catch {
+            Log.memory.warning(
+                "WaxMemory: Store close failed during clear, resetting anyway: \(error.localizedDescription)"
+            )
+        }
+        do {
             try removePersistedStoreIfPresent()
             var waxConfig = Wax.Memory.Config.default
             waxConfig.enableVectorSearch = embedder != nil && configuration.enableVectorSearch
-
             if let embedder {
                 store = try await Wax.Memory(at: url, config: waxConfig, embedding: embedder)
             } else {
@@ -128,7 +180,7 @@ public actor WaxMemory: Memory, MemoryPromptDescriptor, MemorySessionLifecycle {
         }
     }
 
-    // MARK: - MemorySessionLifecycle
+    // MARK: - Session lifecycle
 
     public func beginMemorySession() async {
         // Session management is not available in the public Wax API; no-op.
@@ -242,12 +294,143 @@ public actor WaxMemory: Memory, MemoryPromptDescriptor, MemorySessionLifecycle {
             let candidate = "\(prefix) \(item.text)"
             let tokens = configuration.tokenEstimator.estimateTokens(for: candidate)
 
+            if tokens > tokenLimit { continue }
             if usedTokens + tokens > tokenLimit { break }
             usedTokens += tokens
             lines.append(candidate)
         }
 
+        if lines.isEmpty, rag.items.isEmpty == false {
+            return MemoryMessage.formatContext(
+                persistedMessagesMatchingQueryText(query: rag.query),
+                tokenLimit: tokenLimit,
+                tokenEstimator: configuration.tokenEstimator
+            )
+        }
+
         return lines.joined(separator: "\n")
+    }
+
+    private func formatRAGContext(_ rag: RAGContext, query: MemoryQuery) -> String {
+        guard query.tokenLimit > 0 else { return "" }
+
+        var lines: [String] = []
+        var usedTokens = 0
+
+        for item in rag.items {
+            guard lines.count < query.maxItems else { break }
+
+            let candidate = formatRAGItem(item)
+            let itemLimit = min(query.maxItemTokens, query.tokenLimit)
+            let trimmedCandidate = trimToTokenLimit(candidate, tokenLimit: itemLimit)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedCandidate.isEmpty else {
+                continue
+            }
+
+            let tokens = configuration.tokenEstimator.estimateTokens(for: trimmedCandidate)
+            if usedTokens + tokens > query.tokenLimit {
+                if lines.isEmpty {
+                    let fallback = trimToTokenLimit(trimmedCandidate, tokenLimit: query.tokenLimit)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !fallback.isEmpty {
+                        lines.append(fallback)
+                    }
+                }
+                break
+            }
+
+            usedTokens += tokens
+            lines.append(trimmedCandidate)
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private func formatRAGItem(_ item: RAGContext.Item) -> String {
+        let kind = switch item.kind {
+        case .expanded: "expanded"
+        case .surrogate: "surrogate"
+        case .snippet: "snippet"
+        }
+
+        let sources = item.sources.map { source in
+            switch source {
+            case .text: return "text"
+            case .vector: return "vector"
+            case .timeline: return "timeline"
+            case .structured: return "structured"
+            case .unknown: return "unknown"
+            }
+        }.joined(separator: ",")
+
+        let prefix = "[\(kind) frame:\(item.frameId) score:\(String(format: "%.2f", item.score)) sources:\(sources)]"
+        return "\(prefix) \(item.text)"
+    }
+
+    private func trimToTokenLimit(_ text: String, tokenLimit: Int) -> String {
+        guard tokenLimit > 0 else {
+            return ""
+        }
+
+        if configuration.tokenEstimator.estimateTokens(for: text) <= tokenLimit {
+            return text
+        }
+
+        var lower = 0
+        var upper = text.count
+        var best = ""
+
+        while lower <= upper {
+            let mid = (lower + upper) / 2
+            let candidate = prefix(text, maxCharacters: mid)
+            if configuration.tokenEstimator.estimateTokens(for: candidate) <= tokenLimit {
+                best = candidate
+                lower = mid + 1
+            } else {
+                upper = mid - 1
+            }
+        }
+
+        if !best.isEmpty {
+            return best
+        }
+
+        return prefix(text, maxCharacters: max(1, min(text.count, tokenLimit)))
+    }
+
+    private func prefix(_ text: String, maxCharacters: Int) -> String {
+        guard maxCharacters > 0 else { return "" }
+        guard text.count > maxCharacters else { return text }
+        let end = text.index(text.startIndex, offsetBy: maxCharacters)
+        return String(text[..<end])
+    }
+
+    private func persistedMessagesMatchingQueryText(query: String) -> [MemoryMessage] {
+        let terms = Self.distinctiveSearchTerms(in: query)
+        guard terms.isEmpty == false else { return [] }
+
+        return persistedMessages.filter { message in
+            let content = message.content.lowercased()
+            return terms.allSatisfy { content.contains($0) }
+        }
+    }
+
+    static func distinctiveSearchTerms(in text: String) -> [String] {
+        let stopWords: Set<String> = [
+            "about", "after", "again", "agent", "answer", "before", "context", "memory",
+            "message", "messages", "please", "question", "status", "their", "there",
+            "these", "those", "through", "using", "where", "which", "would"
+        ]
+
+        return Array(
+            Set(
+                text
+                    .lowercased()
+                    .components(separatedBy: CharacterSet.alphanumerics.inverted)
+                    .filter { $0.count >= 4 && stopWords.contains($0) == false }
+            )
+        ).sorted()
     }
 }
 
@@ -257,25 +440,50 @@ public extension WaxMemory {
         makeDefaultStoreURL()
     }
 
+    /// Durable store location under the user's Application Support directory,
+    /// or a uniquely named ephemeral store when an ephemeral root is installed
+    /// via ``SwarmDefaultStoreLocation/installEphemeralRoot(_:)``.
     static func makeDefaultStoreURL() -> URL {
+        if let ephemeralRoot = SwarmDefaultStoreLocation.installedEphemeralRoot {
+            return makeEphemeralStoreURL(under: ephemeralRoot)
+        }
+        return makeDurableStoreURL()
+    }
+
+    /// Durable store location under the user's Application Support directory,
+    /// independent of any installed ephemeral root.
+    internal static func makeDurableStoreURL() -> URL {
         let fileManager = FileManager.default
-        let isRunningTests = SwarmRuntimeEnvironment.isRunningTests
-        let baseURL = isRunningTests
-            ? fileManager.temporaryDirectory
-            : (fileManager.urls(
-                for: .applicationSupportDirectory,
-                in: .userDomainMask
-            ).first ?? fileManager.temporaryDirectory)
+        let baseURL = fileManager.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? fileManager.temporaryDirectory
 
         let root = baseURL
             .appendingPathComponent("Swarm", isDirectory: true)
-            .appendingPathComponent(
-                isRunningTests ? "AgentMemoryTests" : "AgentMemory",
-                isDirectory: true
-            )
+            .appendingPathComponent("AgentMemory", isDirectory: true)
 
-        try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)
-        let fileName = isRunningTests ? "wax-memory-\(UUID().uuidString).mv2s" : "wax-memory.mv2s"
-        return root.appendingPathComponent(fileName)
+        try? SecureFileIO.createDirectory(at: root)
+        return root.appendingPathComponent("wax-memory.mv2s")
+    }
+
+    /// Throwaway store location with a unique file name for isolated runs
+    /// (tests, previews). Placed under `root`, defaulting to the temporary
+    /// directory.
+    internal static func makeEphemeralStoreURL(under root: URL? = nil) -> URL {
+        let fileManager = FileManager.default
+        let baseURL = root ?? fileManager.temporaryDirectory
+
+        let ephemeralRoot = baseURL
+            .appendingPathComponent("Swarm", isDirectory: true)
+            .appendingPathComponent("AgentMemoryTests", isDirectory: true)
+
+        try? SecureFileIO.createDirectory(at: ephemeralRoot)
+        return ephemeralRoot.appendingPathComponent("wax-memory-\(UUID().uuidString).mv2s")
     }
 }
+// Retain legacy casts while current consumers use the requirements on Memory.
+@available(*, deprecated, message: "Use the metadata, lifecycle and retrieval requirements on Memory instead.")
+extension WaxMemory: MemoryPromptDescriptor, MemorySessionLifecycle, MemoryRetrievalPolicyAware {}
+
+#endif

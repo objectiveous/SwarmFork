@@ -73,4 +73,97 @@ struct AgentActorMacroConformanceTests {
 
         #expect(agent.tools.contains { $0.name == "echo" })
     }
+
+    @Test("Generated run seeds replay into eligible composite memory layers")
+    func generatedRunSeedsReplayIntoCompositeMemoryLayer() async throws {
+        let seedable = ConversationMemory(maxMessages: 20)
+        let staticMemory = StaticMacroContextMemory(context: "Static context includes the garnet-anchor marker.")
+        let composite = CompositeMemory([seedable, staticMemory])
+        let session = InMemorySession(sessionId: "macro-composite-memory")
+        try await session.addItems([
+            .user("Replay history includes the prism-session marker.")
+        ])
+
+        let agent = MacroEchoAgent(memory: composite)
+
+        _ = try await agent.run("current turn", session: session)
+
+        let seedableContext = await seedable.context(for: "prism current", tokenLimit: 1_000)
+        #expect(seedableContext.contains("prism-session marker"))
+        #expect(seedableContext.contains("current turn"))
+    }
+
+    @Test("Generated run dispatches lifecycle to defaulted Memory requirements without marker conformance")
+    func generatedRunDispatchesLifecycleWithoutMarkerConformance() async throws {
+        let memory = WitnessLifecycleMemory()
+        let agent = MacroEchoAgent(memory: memory)
+
+        _ = try await agent.run("lifecycle probe")
+
+        let counts = await memory.sessionCounts()
+        #expect(counts.begins == 1)
+        #expect(counts.ends == 1)
+    }
+}
+
+private actor WitnessLifecycleMemory: Memory {
+    private(set) var beginCount = 0
+    private(set) var endCount = 0
+
+    var count: Int { get async { 0 } }
+    var isEmpty: Bool { get async { true } }
+
+    func add(_ message: MemoryMessage) async {
+        _ = message
+    }
+
+    func context(for query: String, tokenLimit: Int) async -> String {
+        _ = query
+        _ = tokenLimit
+        return ""
+    }
+
+    func allMessages() async -> [MemoryMessage] { [] }
+    func clear() async {}
+
+    func beginMemorySession() async {
+        beginCount += 1
+    }
+
+    func endMemorySession() async {
+        endCount += 1
+    }
+
+    func sessionCounts() -> (begins: Int, ends: Int) {
+        (beginCount, endCount)
+    }
+}
+
+private actor StaticMacroContextMemory: Memory, MemorySessionImportPolicy {
+    nonisolated let allowsAutomaticSessionSeeding = false
+
+    private let contextText: String
+
+    init(context: String) {
+        self.contextText = context
+    }
+
+    var count: Int { get async { 1 } }
+    var isEmpty: Bool { get async { false } }
+
+    func add(_ message: MemoryMessage) async {
+        _ = message
+    }
+
+    func context(for query: String, tokenLimit: Int) async -> String {
+        _ = query
+        _ = tokenLimit
+        return contextText
+    }
+
+    func allMessages() async -> [MemoryMessage] {
+        []
+    }
+
+    func clear() async {}
 }

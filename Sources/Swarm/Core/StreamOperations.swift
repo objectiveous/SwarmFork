@@ -68,8 +68,14 @@ public extension AsyncThrowingStream where Element == AgentEvent, Failure == Err
     /// When a stream throws an error, the factory is called again to create a new stream,
     /// up to the specified maximum attempts.
     ///
+    /// `maxAttempts` counts total attempts including the initial attempt and must
+    /// be at least 1. This matches ``RetryPolicy/maxAttempts`` and
+    /// `HiveRetryPolicy`: `1` runs the factory once with no retries, `3` runs it
+    /// up to three times. Values below 1 fail the returned stream with
+    /// `ResilienceError.invalidMaxAttempts` without invoking the factory.
+    ///
     /// - Parameters:
-    ///   - maxAttempts: Maximum number of attempts (including the initial attempt). Default: 3
+    ///   - maxAttempts: Total attempts including the initial attempt. Default: 3
     ///   - delay: Duration to wait between retry attempts. Default: zero
     ///   - factory: Closure that creates a new stream for each attempt
     /// - Returns: A stream from the first successful attempt.
@@ -96,6 +102,13 @@ public extension AsyncThrowingStream where Element == AgentEvent, Failure == Err
         delay: Duration = .zero,
         factory: @escaping @Sendable () async -> AsyncThrowingStream<AgentEvent, Error>
     ) -> AsyncThrowingStream<AgentEvent, Error> {
+        guard maxAttempts >= 1 else {
+            let invalid = maxAttempts
+            return StreamHelper.makeTrackedStream { continuation in
+                continuation.finish(throwing: ResilienceError.invalidMaxAttempts(invalid))
+            }
+        }
+
         let (stream, continuation): (AsyncThrowingStream<AgentEvent, Error>, AsyncThrowingStream<AgentEvent, Error>.Continuation) = StreamHelper.makeStream()
 
         let task = Task { @Sendable in
@@ -122,7 +135,10 @@ public extension AsyncThrowingStream where Element == AgentEvent, Failure == Err
                     lastError = error
                     if attempts < maxAttempts, delay != .zero {
                         do {
-                            try await Task.sleep(for: delay)
+                            // Routed through the SwarmClock seam so a future
+                            // injected virtual clock makes retry delays
+                            // deterministic in tests.
+                            try await LiveSwarmClock.live.sleep(nanoseconds: delay.swarmNanoseconds)
                         } catch is CancellationError {
                             continuation.finish(throwing: CancellationError())
                             return
@@ -196,7 +212,7 @@ public extension AsyncThrowingStream where Element == AgentEvent, Failure == Err
     /// Example:
     /// ```swift
     /// let filtered = stream.filter { event in
-    ///     if case .thinking(let thought) = event {
+    ///     if case .output(.thinking(thought: let thought)) = event {
     ///         return thought.count > 10
     ///     }
     ///     return false
@@ -223,7 +239,7 @@ public extension AsyncThrowingStream where Element == AgentEvent, Failure == Err
     /// Example:
     /// ```swift
     /// let uppercased = stream.map { event -> String in
-    ///     if case .thinking(let thought) = event {
+    ///     if case .output(.thinking(thought: let thought)) = event {
     ///         return thought.uppercased()
     ///     }
     ///     return ""
@@ -310,7 +326,7 @@ public extension AsyncThrowingStream where Element == AgentEvent, Failure == Err
     /// Example:
     /// ```swift
     /// let firstThinking = try await stream.first { event in
-    ///     if case .thinking = event { return true }
+    ///     if case .output(.thinking) = event { return true }
     ///     return false
     /// }
     /// ```
@@ -355,7 +371,7 @@ public extension AsyncThrowingStream where Element == AgentEvent, Failure == Err
     /// Example:
     /// ```swift
     /// let combined = try await stream.reduce("") { acc, event in
-    ///     if case .thinking(let thought) = event {
+    ///     if case .output(.thinking(thought: let thought)) = event {
     ///         return acc + thought
     ///     }
     ///     return acc
@@ -728,7 +744,7 @@ public extension AsyncThrowingStream where Element == AgentEvent, Failure == Err
     /// ```swift
     /// // Extract only thinking content as uppercase strings
     /// let thoughts = stream.compactMap { event -> String? in
-    ///     if case .thinking(let thought) = event {
+    ///     if case .output(.thinking(thought: let thought)) = event {
     ///         return thought.uppercased()
     ///     }
     ///     return nil
@@ -805,7 +821,7 @@ public extension AsyncThrowingStream where Element == AgentEvent, Failure == Err
     /// ```swift
     /// // Accumulate all thinking content
     /// for try await combined in stream.scan("") { acc, event in
-    ///     if case .thinking(let thought) = event {
+    ///     if case .output(.thinking(thought: let thought)) = event {
     ///         return acc + thought
     ///     }
     ///     return acc
@@ -850,173 +866,5 @@ private final class TimeoutTaskRef: @unchecked Sendable {
             defer { lock.unlock() }
             _task = newValue
         }
-    }
-}
-
-// MARK: - MergeErrorStrategy
-
-/// Strategy for handling errors when merging multiple streams.
-public enum MergeErrorStrategy: Sendable {
-    /// Fail immediately on the first error from any stream.
-    case failFast
-
-    /// Continue processing other streams and collect errors as events.
-    /// Errors are yielded as `.failed` events.
-    case continueAndCollect
-
-    /// Ignore all errors from individual streams (legacy behavior).
-    /// Use with caution - errors will be silently swallowed.
-    case ignoreErrors
-}
-
-// MARK: - AgentEventStream
-
-/// Namespace for stream utility functions.
-public enum AgentEventStream {
-    // MARK: Public
-
-    /// Merges multiple agent event streams into one.
-    ///
-    /// Events from all streams are yielded as they arrive, in any order.
-    ///
-    /// - Parameters:
-    ///   - streams: The streams to merge.
-    ///   - errorStrategy: How to handle errors from individual streams. Defaults to `.continueAndCollect`.
-    /// - Returns: A merged stream of all events.
-    ///
-    /// Example:
-    /// ```swift
-    /// // Default: errors become .failed events
-    /// let merged = AgentEventStream.merge(stream1, stream2, stream3)
-    /// for try await event in merged {
-    ///     // Events from all streams, errors as .failed events
-    /// }
-    ///
-    /// // Fail fast on first error
-    /// let strictMerge = AgentEventStream.merge(stream1, stream2, errorStrategy: .failFast)
-    /// ```
-    ///
-    /// - Note: When using `.continueAndCollect`, errors are converted to `.failed` events,
-    ///   allowing other streams to continue processing. Use `.failFast` for critical workflows
-    ///   where any error should stop all processing.
-    public static func merge(
-        _ streams: AsyncThrowingStream<AgentEvent, Error>...,
-        errorStrategy: MergeErrorStrategy = .continueAndCollect
-    ) -> AsyncThrowingStream<AgentEvent, Error> {
-        let (stream, continuation): (AsyncThrowingStream<AgentEvent, Error>, AsyncThrowingStream<AgentEvent, Error>.Continuation) = StreamHelper.makeStream()
-        let coordinator = MergeCoordinator(continuation: continuation)
-
-        let task = Task { @Sendable in
-            await withTaskGroup(of: Void.self) { group in
-                for stream in streams {
-                    group.addTask {
-                        do {
-                            for try await event in stream {
-                                await coordinator.yield(event)
-                            }
-                        } catch {
-                            switch errorStrategy {
-                            case .failFast:
-                                await coordinator.finish(throwing: error)
-                            case .continueAndCollect:
-                                // Convert error to a failed event
-                                let agentError = error as? AgentError ?? .internalError(reason: error.localizedDescription)
-                                await coordinator.yield(.lifecycle(.failed(error: agentError)))
-                            case .ignoreErrors:
-                                // Silently ignore - legacy behavior
-                                break
-                            }
-                        }
-                    }
-                }
-            }
-            await coordinator.finish()
-        }
-
-        continuation.onTermination = { @Sendable _ in
-            task.cancel()
-        }
-
-        return stream
-    }
-
-    /// Creates an empty stream that completes immediately.
-    ///
-    /// - Returns: An empty stream.
-    public static func empty() -> AsyncThrowingStream<AgentEvent, Error> {
-        AsyncThrowingStream { continuation in
-            continuation.finish()
-        }
-    }
-
-    /// Creates a stream from an array of events.
-    ///
-    /// - Parameter events: The events to emit.
-    /// - Returns: A stream that emits all events then completes.
-    ///
-    /// Example:
-    /// ```swift
-    /// let stream = AgentEventStream.from([
-    ///     .started(input: "test"),
-    ///     .thinking(thought: "Processing..."),
-    ///     .completed(result: result)
-    /// ])
-    /// ```
-    public static func from(_ events: [AgentEvent]) -> AsyncThrowingStream<AgentEvent, Error> {
-        AsyncThrowingStream { continuation in
-            for event in events {
-                continuation.yield(event)
-            }
-            continuation.finish()
-        }
-    }
-
-    /// Creates a stream that emits a single event.
-    ///
-    /// - Parameter event: The event to emit.
-    /// - Returns: A stream that emits one event then completes.
-    public static func just(_ event: AgentEvent) -> AsyncThrowingStream<AgentEvent, Error> {
-        from([event])
-    }
-
-    /// Creates a stream that fails with an error.
-    ///
-    /// - Parameter error: The error to throw.
-    /// - Returns: A stream that immediately fails.
-    public static func fail(_ error: Error) -> AsyncThrowingStream<AgentEvent, Error> {
-        AsyncThrowingStream { continuation in
-            continuation.finish(throwing: error)
-        }
-    }
-
-    // MARK: Private
-
-    /// Actor that serializes concurrent yield/finish calls to prevent race conditions
-    private actor MergeCoordinator {
-        // MARK: Internal
-
-        init(continuation: AsyncThrowingStream<AgentEvent, Error>.Continuation) {
-            self.continuation = continuation
-        }
-
-        func yield(_ event: AgentEvent) {
-            guard !hasFinished else { return }
-            continuation.yield(event)
-        }
-
-        func finish(throwing error: Error? = nil) {
-            guard !hasFinished else { return }
-            hasFinished = true
-            if let error {
-                continuation.finish(throwing: error)
-            } else {
-                continuation.finish()
-            }
-        }
-
-        // MARK: Private
-
-        private var hasFinished = false
-        private let continuation: AsyncThrowingStream<AgentEvent, Error>.Continuation
     }
 }

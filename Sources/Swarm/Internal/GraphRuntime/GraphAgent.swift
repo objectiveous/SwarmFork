@@ -1,9 +1,9 @@
+#if SWARM_INTEGRATIONS
 // GraphAgent.swift
 // HiveSwarm
 //
 // Bridge adapter that exposes a Hive-native agent graph as a Swarm `AgentRuntime`.
 
-import CryptoKit
 import Foundation
 import HiveCore
 
@@ -120,7 +120,14 @@ struct GraphAgent: AgentRuntime, Sendable {
             )
             await cancellation.track(handle)
 
-            let outcome = try await handle.outcome.value
+            let outcome: HiveRunOutcome<ChatGraph.Schema>
+            do {
+                outcome = try await handle.outcome.value
+            } catch {
+                await cancellation.untrack(handle.attemptID)
+                throw error
+            }
+            await cancellation.untrack(handle.attemptID)
             let result = try buildResult(from: outcome, builder: resultBuilder)
 
             await observer?.onAgentEnd(context: nil, agent: self, result: result)
@@ -228,8 +235,10 @@ struct GraphAgent: AgentRuntime, Sendable {
                     outcome = try await handle.outcome.value
                 } catch {
                     eventsTask.cancel()
+                    await cancellation.untrack(handle.attemptID)
                     throw error
                 }
+                await cancellation.untrack(handle.attemptID)
 
                 // Wait for all events to be consumed before building the result.
                 await eventsTask.value
@@ -263,7 +272,7 @@ struct GraphAgent: AgentRuntime, Sendable {
         }
     }
 
-    /// Cancels any ongoing Hive run.
+    /// Cancels every Hive run currently tracked on this agent.
     func cancel() async {
         await cancellation.cancelCurrent()
     }
@@ -324,23 +333,27 @@ struct GraphAgent: AgentRuntime, Sendable {
     private static func mapCustomDebugEvent(name: String, event: HiveEvent) -> AgentEvent? {
         switch name {
         case "modelInvocationStarted":
-            return .observation(.llmStarted(model: event.metadata["model"], promptTokens: nil))
+            return .observation(.llmStarted(model: event.metadata[StreamEventMetadata.model], promptTokens: nil))
         case "modelToken":
-            return .output(.token(event.metadata["text"] ?? ""))
+            return .output(.token(event.metadata[StreamEventMetadata.text] ?? ""))
         case "modelInvocationFinished":
             return .observation(.llmCompleted(model: nil, promptTokens: nil, completionTokens: nil, duration: 0))
         case "toolInvocationStarted":
-            let toolName = event.metadata["name"] ?? "tool"
+            let toolName = event.metadata[StreamEventMetadata.name] ?? "tool"
             let call = toolCall(from: event, toolName: toolName)
             return .tool(.started(call: call))
         case "toolInvocationFinished":
-            let toolName = event.metadata["name"] ?? "tool"
+            let toolName = event.metadata[StreamEventMetadata.name] ?? "tool"
             let call = toolCall(from: event, toolName: toolName)
-            if event.metadata["success"] == "true" {
-                let result = ToolResult(callId: call.id, isSuccess: true, output: .null, duration: .zero)
+            if event.metadata[StreamEventMetadata.success] == "true" {
+                let result = ToolResult.success(
+                    callId: call.id,
+                    output: event.metadata[StreamEventMetadata.output].map { SendableValue($0) } ?? .null,
+                    duration: .zero
+                )
                 return .tool(.completed(call: call, result: result))
             }
-            let error = AgentError.toolExecutionFailed(toolName: toolName, underlyingError: "Tool invocation failed")
+            let error = AgentError.toolFailure(toolName: toolName, message: "Tool invocation failed", cause: nil)
             return .tool(.failed(call: call, error: error))
         default:
             return nil
@@ -348,7 +361,7 @@ struct GraphAgent: AgentRuntime, Sendable {
     }
 
     private static func toolCall(from event: HiveEvent, toolName: String) -> ToolCall {
-        let providerCallId = event.metadata["toolCallID"]
+        let providerCallId = event.metadata[StreamEventMetadata.toolCallID]
         let stableID = stableUUID(
             for: providerCallId ?? "\(event.id.eventIndex)|\(event.id.stepIndex.map(String.init) ?? "nil")|\(toolName)"
         )
@@ -362,8 +375,7 @@ struct GraphAgent: AgentRuntime, Sendable {
     }
 
     private static func stableUUID(for input: String) -> UUID {
-        let digest = SHA256.hash(data: Data(input.utf8))
-        let bytes = Array(digest)
+        let bytes = SwarmSHA256.hash(Data(input.utf8))
         precondition(bytes.count >= 16)
         return UUID(uuid: (
             bytes[0], bytes[1], bytes[2], bytes[3],
@@ -436,7 +448,7 @@ struct GraphAgent: AgentRuntime, Sendable {
 
             for message in messages where !message.toolCalls.isEmpty {
                 for hiveToolCall in message.toolCalls {
-                    let swarmID = UUID()
+                    let swarmID = Self.stableUUID(for: hiveToolCall.id)
                     hiveToSwarmID[hiveToolCall.id] = swarmID
                     let toolCall = ToolCall(
                         id: swarmID,
@@ -467,9 +479,8 @@ struct GraphAgent: AgentRuntime, Sendable {
                     callID = syntheticID
                 }
 
-                let toolResult = ToolResult(
+                let toolResult = ToolResult.success(
                     callId: callID,
-                    isSuccess: true,
                     output: .string(message.content),
                     duration: .zero
                 )
@@ -664,26 +675,39 @@ extension GraphAgent: ConversationBranchingRuntime {
 
 // MARK: - CancellationController
 
-/// Actor that safely tracks and cancels the current Hive run handle.
+/// Actor that safely tracks and cancels in-flight Hive run handles.
 ///
-/// Stores the actual `HiveRunHandle` so cancellation propagates to the Hive runtime,
-/// not just to an awaiting wrapper task.
+/// Runs are keyed by `HiveRunAttemptID` (not reusable `HiveRunID`) so two
+/// concurrent attempts on the same thread cannot overwrite each other, and
+/// a finishing attempt cannot untrack a newer one. Stores the actual
+/// `HiveRunHandle` outcome tasks so cancellation propagates to the Hive
+/// runtime, not just to an awaiting wrapper task.
 private actor CancellationController {
-    private var currentHandle: HiveRunHandle<ChatGraph.Schema>?
+    private let registry = TrackedRunRegistry<HiveRunAttemptID>()
 
-    /// Records a new run handle for potential cancellation.
-    func track(_ handle: HiveRunHandle<ChatGraph.Schema>) {
-        // Cancel any previously tracked run.
-        currentHandle?.outcome.cancel()
-        currentHandle = handle
+    /// Records a new run handle without cancelling any previously tracked run.
+    func track(_ handle: HiveRunHandle<ChatGraph.Schema>) async {
+        await registry.begin(handle.attemptID) { [outcome = handle.outcome] in
+            outcome.cancel()
+        }
     }
 
-    /// Cancels the currently tracked run.
-    func cancelCurrent() {
-        currentHandle?.outcome.cancel()
-        currentHandle = nil
+    /// Removes a finished run from tracking without cancelling it.
+    func untrack(_ attemptID: HiveRunAttemptID) async {
+        await registry.finish(attemptID)
+    }
+
+    /// Cancels every currently tracked run and clears the registry.
+    func cancelCurrent() async {
+        await registry.cancelAll()
     }
 }
 
+/// Graph-side alias of the shared keyed registry. Lean builds exclude
+/// `Internal/GraphRuntime`, so the implementation lives in always-compiled
+/// `Sources/Swarm/Internal/KeyedRunRegistry.swift`.
+typealias TrackedRunRegistry = KeyedRunRegistry
+
 // HiveChatRole typed constants are defined in ChatGraph.swift (internal)
 // and shared across the HiveSwarm module.
+#endif

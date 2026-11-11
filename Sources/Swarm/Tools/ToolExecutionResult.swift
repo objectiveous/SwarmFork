@@ -150,7 +150,7 @@ public struct ToolExecutionResult: Sendable {
         arguments: [String: SendableValue],
         result: Result<SendableValue, Error>,
         duration: Duration,
-        timestamp: Date = Date()
+        timestamp: Date = TurnEnvironment.live.now()
     ) {
         self.toolName = toolName
         self.arguments = arguments
@@ -173,7 +173,7 @@ public struct ToolExecutionResult: Sendable {
         arguments: [String: SendableValue],
         value: SendableValue,
         duration: Duration,
-        timestamp: Date = Date()
+        timestamp: Date = TurnEnvironment.live.now()
     ) -> ToolExecutionResult {
         ToolExecutionResult(
             toolName: toolName,
@@ -198,7 +198,7 @@ public struct ToolExecutionResult: Sendable {
         arguments: [String: SendableValue],
         error: Error,
         duration: Duration,
-        timestamp: Date = Date()
+        timestamp: Date = TurnEnvironment.live.now()
     ) -> ToolExecutionResult {
         ToolExecutionResult(
             toolName: toolName,
@@ -207,6 +207,40 @@ public struct ToolExecutionResult: Sendable {
             duration: duration,
             timestamp: timestamp
         )
+    }
+
+    /// Maps an Engine ``ToolResult`` onto the public parallel-executor result.
+    ///
+    /// When ``underlyingError`` is present (the Engine still has the thrown
+    /// instance), that error is stored so callers can inspect type and cause.
+    /// String-only ``ToolResult`` failures synthesize ``AgentError/toolFailure``
+    /// with no cause.
+    static func from(
+        call: ToolCall,
+        result: ToolResult,
+        underlyingError: (any Error)? = nil
+    ) -> ToolExecutionResult {
+        switch result.outcome {
+        case let .success(value):
+            return .success(
+                toolName: call.toolName,
+                arguments: call.arguments,
+                value: value,
+                duration: result.duration
+            )
+        case let .failure(message):
+            let error = underlyingError ?? AgentError.toolFailure(
+                toolName: call.toolName,
+                message: message,
+                cause: nil
+            )
+            return .failure(
+                toolName: call.toolName,
+                arguments: call.arguments,
+                error: error,
+                duration: result.duration
+            )
+        }
     }
 }
 

@@ -1,61 +1,439 @@
 import Foundation
 
+/// Package-internal context-window decisions shared by ``PromptEnvelope`` and
+/// ``SlidingWindowMemory``.
+///
+/// Callers inject a token counter so the same fit/truncate policy can run
+/// against a provider counter, ``EstimatedPromptTokenCounter``, or a test fake.
+/// Roles stay; this is windowing, not flattening to a single user string.
+enum ContextWindow {
+    struct Policy: Equatable, Sendable {
+        let maxTokens: Int
+        let protectLeadingSystem: Bool
+        let alwaysKeepLast: Bool
+
+        static func fitting(_ profile: ContextProfile) -> Policy {
+            Policy(
+                maxTokens: profile.budget.maxInputTokens,
+                protectLeadingSystem: true,
+                alwaysKeepLast: true
+            )
+        }
+
+        static func strict4k(_ profile: ContextProfile) -> Policy {
+            fitting(profile)
+        }
+    }
+
+    /// Drops oldest unprotected messages until the conversation fits `policy.maxTokens`.
+    ///
+    /// Token counts are measured on ``InferenceMessage/flattenPrompt(_:)``. The injected
+    /// counter receives that labeled string, not raw message bodies.
+    ///
+    /// When `alwaysKeepLast` is true, the latest message is kept. A leading `.system`
+    /// message is kept when `protectLeadingSystem` is true; if system + last still
+    /// overflow, last (and if needed system text) is truncated so a non-empty system
+    /// remains.
+    ///
+    /// When `alwaysKeepLast` is false, eviction is drop-oldest only (no truncation).
+    /// At least one message is always retained.
+    static func fit(
+        messages: [InferenceMessage],
+        policy: Policy,
+        countTokens: @Sendable (String) async -> Int
+    ) async -> [InferenceMessage] {
+        guard !messages.isEmpty else {
+            return messages
+        }
+
+        let maxTokens = policy.maxTokens
+        if await tokenCount(of: messages, countTokens: countTokens) <= maxTokens {
+            return messages
+        }
+
+        if !policy.alwaysKeepLast {
+            return await dropOldest(
+                messages,
+                maxTokens: maxTokens,
+                protectLeadingSystem: policy.protectLeadingSystem,
+                countTokens: countTokens
+            )
+        }
+
+        let lastIndex = messages.count - 1
+        let last = messages[lastIndex]
+        let hasProtectedSystem = policy.protectLeadingSystem && messages[0].role == .system
+        let protectedSystem = hasProtectedSystem ? messages[0] : nil
+        let lastIsProtectedSystem = lastIndex == 0 && hasProtectedSystem
+
+        var droppable = Array(messages.dropLast())
+        if hasProtectedSystem, !droppable.isEmpty {
+            droppable.removeFirst()
+        }
+
+        var kept: [InferenceMessage] = []
+        while let candidate = droppable.popLast() {
+            let next = assemble(
+                protectedSystem: protectedSystem,
+                older: [candidate] + kept,
+                last: last,
+                lastIsProtectedSystem: lastIsProtectedSystem
+            )
+            if await tokenCount(of: next, countTokens: countTokens) <= maxTokens {
+                kept.insert(candidate, at: 0)
+            } else {
+                break
+            }
+        }
+
+        let windowed = assemble(
+            protectedSystem: protectedSystem,
+            older: kept,
+            last: last,
+            lastIsProtectedSystem: lastIsProtectedSystem
+        )
+        if await tokenCount(of: windowed, countTokens: countTokens) <= maxTokens {
+            return windowed
+        }
+
+        return await fitProtectedSystemAndLast(
+            protectedSystem,
+            last: last,
+            lastIsProtectedSystem: lastIsProtectedSystem,
+            maxTokens: maxTokens,
+            countTokens: countTokens
+        )
+    }
+
+    /// Longest character prefix of `text` whose token count is within `maxTokens`.
+    ///
+    /// If even `minimum` overflows, `minimum` is returned so callers can keep a
+    /// non-empty protected system head.
+    static func longestPrefix(
+        of text: String,
+        maxTokens: Int,
+        minimum: String = "",
+        countTokens: @Sendable (String) async -> Int
+    ) async -> String {
+        guard maxTokens > 0 else {
+            return minimum
+        }
+
+        if await countTokens(text) <= maxTokens {
+            return text
+        }
+
+        var lower = minimum.count
+        var upper = text.count
+        var best = minimum
+
+        while lower <= upper {
+            let mid = (lower + upper) / 2
+            let candidate = String(text.prefix(mid))
+            if await countTokens(candidate) <= maxTokens {
+                best = candidate
+                lower = mid + 1
+            } else {
+                upper = mid - 1
+            }
+        }
+
+        return best
+    }
+
+    /// Synchronous counterpart of ``longestPrefix(of:maxTokens:minimum:countTokens:)``
+    /// for callers that cannot suspend (actor-isolated mutation).
+    static func longestPrefix(
+        of text: String,
+        maxTokens: Int,
+        minimum: String = "",
+        countTokens: (String) -> Int
+    ) -> String {
+        guard maxTokens > 0 else {
+            return minimum
+        }
+
+        if countTokens(text) <= maxTokens {
+            return text
+        }
+
+        var lower = minimum.count
+        var upper = text.count
+        var best = minimum
+
+        while lower <= upper {
+            let mid = (lower + upper) / 2
+            let candidate = String(text.prefix(mid))
+            if countTokens(candidate) <= maxTokens {
+                best = candidate
+                lower = mid + 1
+            } else {
+                upper = mid - 1
+            }
+        }
+
+        return best
+    }
+
+    /// Keep-newest eviction: drop oldest messages until the additive token sum
+    /// fits, always leaving at least one message.
+    static func evictOldest<Message: Sendable>(
+        from messages: [Message],
+        maxTokens: Int,
+        tokensOf: @Sendable (Message) async -> Int
+    ) async -> [Message] {
+        guard !messages.isEmpty else {
+            return messages
+        }
+
+        var tokenCounts: [Int] = []
+        tokenCounts.reserveCapacity(messages.count)
+        for message in messages {
+            tokenCounts.append(await tokensOf(message))
+        }
+        return evictOldest(from: messages, maxTokens: maxTokens, tokenCounts: tokenCounts)
+    }
+
+    /// Synchronous counterpart of ``evictOldest(from:maxTokens:tokensOf:)`` for
+    /// callers that cannot suspend (actor-isolated mutation).
+    static func evictOldest<Message>(
+        from messages: [Message],
+        maxTokens: Int,
+        tokensOf: (Message) -> Int
+    ) -> [Message] {
+        evictOldest(
+            from: messages,
+            maxTokens: maxTokens,
+            tokenCounts: messages.map(tokensOf)
+        )
+    }
+
+    private static func evictOldest<Message>(
+        from messages: [Message],
+        maxTokens: Int,
+        tokenCounts: [Int]
+    ) -> [Message] {
+        guard !messages.isEmpty else {
+            return messages
+        }
+
+        var remaining = messages
+        var counts = tokenCounts
+        var total = counts.reduce(0, +)
+        while total > maxTokens, remaining.count > 1 {
+            remaining.removeFirst()
+            total -= counts.removeFirst()
+        }
+        return remaining
+    }
+
+    private static func dropOldest(
+        _ messages: [InferenceMessage],
+        maxTokens: Int,
+        protectLeadingSystem: Bool,
+        countTokens: @Sendable (String) async -> Int
+    ) async -> [InferenceMessage] {
+        var remaining = messages
+        let protectedCount = (protectLeadingSystem && remaining.first?.role == .system) ? 1 : 0
+        let floorCount = max(protectedCount, 1)
+        while remaining.count > floorCount,
+            await tokenCount(of: remaining, countTokens: countTokens) > maxTokens
+        {
+            remaining.remove(at: protectedCount)
+        }
+        return remaining
+    }
+
+    private static func tokenCount(
+        of messages: [InferenceMessage],
+        countTokens: @Sendable (String) async -> Int
+    ) async -> Int {
+        await countTokens(InferenceMessage.flattenPrompt(messages))
+    }
+
+    private static func assemble(
+        protectedSystem: InferenceMessage?,
+        older: [InferenceMessage],
+        last: InferenceMessage,
+        lastIsProtectedSystem: Bool
+    ) -> [InferenceMessage] {
+        if lastIsProtectedSystem {
+            return protectedSystem.map { [$0] } ?? [last]
+        }
+        if let protectedSystem {
+            return [protectedSystem] + older + [last]
+        }
+        return older + [last]
+    }
+
+    /// Fits a protected leading system and the latest turn under `maxTokens`.
+    /// Prefers a full system + truncated last (head-preserving). Only clips
+    /// system text when the system message itself cannot share the budget.
+    private static func fitProtectedSystemAndLast(
+        _ protectedSystem: InferenceMessage?,
+        last: InferenceMessage,
+        lastIsProtectedSystem: Bool,
+        maxTokens: Int,
+        countTokens: @Sendable (String) async -> Int
+    ) async -> [InferenceMessage] {
+        if lastIsProtectedSystem, let system = protectedSystem {
+            return [await truncatedMessage(
+                system,
+                prefixedBy: [],
+                maxTokens: maxTokens,
+                keepNonEmpty: true,
+                countTokens: countTokens
+            )]
+        }
+
+        if let system = protectedSystem {
+            let clippedLast = await truncatedMessage(
+                last,
+                prefixedBy: [system],
+                maxTokens: maxTokens,
+                keepNonEmpty: false,
+                countTokens: countTokens
+            )
+            let withFullSystem = [system, clippedLast]
+            if await tokenCount(of: withFullSystem, countTokens: countTokens) <= maxTokens {
+                return withFullSystem
+            }
+
+            // System itself overflows even with an empty last. Keep a non-empty
+            // system head and a last-turn tail, matching the flattened-prompt contract.
+            let tailShare = max(16, maxTokens / 3)
+            let headShare = max(16, maxTokens - tailShare)
+            let clippedSystem = await truncatedMessage(
+                system,
+                prefixedBy: [],
+                maxTokens: headShare,
+                keepNonEmpty: true,
+                countTokens: countTokens
+            )
+            let fittedLast = await truncatedMessage(
+                last,
+                prefixedBy: [clippedSystem],
+                maxTokens: maxTokens,
+                keepNonEmpty: false,
+                countTokens: countTokens
+            )
+            return [clippedSystem, fittedLast]
+        }
+
+        return [await truncatedMessage(
+            last,
+            prefixedBy: [],
+            maxTokens: maxTokens,
+            keepNonEmpty: false,
+            countTokens: countTokens
+        )]
+    }
+
+    private static func truncatedMessage(
+        _ message: InferenceMessage,
+        prefixedBy prefix: [InferenceMessage],
+        maxTokens: Int,
+        keepNonEmpty: Bool,
+        countTokens: @Sendable (String) async -> Int
+    ) async -> InferenceMessage {
+        let minimum = keepNonEmpty && !message.content.isEmpty
+            ? String(message.content.prefix(1))
+            : ""
+        let clipped = await longestPrefix(
+            of: message.content,
+            maxTokens: maxTokens,
+            minimum: minimum,
+            countTokens: { candidate in
+                let next = prefix + [replacingContent(of: message, with: candidate)]
+                return await countTokens(InferenceMessage.flattenPrompt(next))
+            }
+        )
+        return replacingContent(of: message, with: clipped)
+    }
+
+    private static func replacingContent(of message: InferenceMessage, with content: String) -> InferenceMessage {
+        switch message.body {
+        case .system:
+            InferenceMessage(body: .system(content), attachments: message.attachments)
+        case .user:
+            InferenceMessage(body: .user(content), attachments: message.attachments)
+        case let .assistant(_, toolCalls):
+            InferenceMessage(
+                body: .assistant(content, toolCalls: toolCalls),
+                attachments: message.attachments
+            )
+        case let .tool(name, _, toolCallID):
+            InferenceMessage(
+                body: .tool(name: name, content: content, toolCallID: toolCallID),
+                attachments: message.attachments
+            )
+        }
+    }
+}
+
 /// Enforces context-envelope limits for provider prompts.
 enum PromptEnvelope {
-    private static let truncationMarker = "\n\n[... context truncated for strict4k budget ...]\n\n"
+    static let omittedToolResult = "Tool result omitted to fit context."
 
-    static func enforce(prompt: String, profile: ContextProfile) async -> String {
-        guard profile.preset == .strict4k else {
-            return prompt
+    /// Drops oldest non-system messages until the conversation fits the profile budget.
+    /// Roles stay. The latest message is always kept. A leading `.system` message is
+    /// never dropped; if system + last still overflow, last (and if needed system
+    /// text) is truncated so a non-empty system remains.
+    ///
+    /// Over-budget tool bodies are stubbed first (all but the last two), then the
+    /// shared ``ContextWindow`` core fits the remainder. This runs for every
+    /// profile, not only ``ContextProfile/strict4k``.
+    static func enforce(messages: [InferenceMessage], profile: ContextProfile) async -> [InferenceMessage] {
+        guard !messages.isEmpty else {
+            return messages
         }
 
-        let counter = PromptTokenBudgeting.counter()
-        let maxTokens = profile.budget.maxInputTokens
-
-        if await PromptTokenBudgeting.countTokens(in: prompt, using: counter) <= maxTokens {
-            return prompt
+        let budget = profile.budget.maxInputTokens
+        var working = messages
+        if await tokenCount(of: working) > budget {
+            working = stubOlderToolResults(working, keepLast: 2)
         }
 
-        let marker = truncationMarker
-        let markerTokens = await PromptTokenBudgeting.countTokens(in: marker, using: counter)
-
-        if maxTokens <= markerTokens + 16 {
-            return await PromptTokenBudgeting.prefix(marker, maxTokens: maxTokens, using: counter)
-        }
-
-        // Preserve the beginning (instructions/system context) and the end
-        // (latest user/tool context), trimming middle context first.
-        let tailTokens = max(16, maxTokens / 3)
-        let headTokens = max(16, maxTokens - markerTokens - tailTokens)
-
-        let head = await PromptTokenBudgeting.prefix(prompt, maxTokens: headTokens, using: counter)
-        let tail = await PromptTokenBudgeting.suffix(prompt, maxTokens: tailTokens, using: counter)
-
-        var combined = head + marker + tail
-        let combinedTokens = await PromptTokenBudgeting.countTokens(in: combined, using: counter)
-        if combinedTokens <= maxTokens {
-            return combined
-        }
-
-        let overflow = combinedTokens - maxTokens
-        let adjustedTail = max(0, tailTokens - overflow)
-        let adjustedSuffix = await PromptTokenBudgeting.suffix(
-            prompt,
-            maxTokens: adjustedTail,
-            using: counter
+        return await ContextWindow.fit(
+            messages: working,
+            policy: .fitting(profile),
+            countTokens: { await PromptTokenBudgeting.countTokens(in: $0) }
         )
-        combined = head + marker + adjustedSuffix
+    }
 
-        if await PromptTokenBudgeting.countTokens(in: combined, using: counter) <= maxTokens {
-            return combined
+    /// Keeps a leading system message and the latest turn. Used after Apple
+    /// rejects a prompt that still overflowed the estimated budget.
+    static func compactForRetry(_ messages: [InferenceMessage]) -> [InferenceMessage] {
+        guard let last = messages.last else {
+            return messages
         }
-
-        let adjustedHead = max(0, maxTokens - markerTokens)
-        let fallback = await PromptTokenBudgeting.prefix(prompt, maxTokens: adjustedHead, using: counter) + marker
-        if await PromptTokenBudgeting.countTokens(in: fallback, using: counter) <= maxTokens {
-            return fallback
+        if messages.first?.role == .system, messages[0] != last {
+            return [messages[0], last]
         }
+        return [last]
+    }
 
-        return await PromptTokenBudgeting.prefix(marker, maxTokens: maxTokens, using: counter)
+    private static func stubOlderToolResults(
+        _ messages: [InferenceMessage],
+        keepLast: Int
+    ) -> [InferenceMessage] {
+        let toolIndices = messages.indices.filter { messages[$0].role == .tool }
+        guard toolIndices.count > keepLast else {
+            return messages
+        }
+        let kept = Set(toolIndices.suffix(keepLast))
+        return messages.enumerated().map { index, message in
+            guard case let .tool(name, _, toolCallID) = message.body, kept.contains(index) == false else {
+                return message
+            }
+            return InferenceMessage(
+                body: .tool(name: name, content: omittedToolResult, toolCallID: toolCallID),
+                attachments: message.attachments
+            )
+        }
+    }
+
+    private static func tokenCount(of messages: [InferenceMessage]) async -> Int {
+        await PromptTokenBudgeting.countTokens(in: InferenceMessage.flattenPrompt(messages))
     }
 }

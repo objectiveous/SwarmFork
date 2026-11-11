@@ -15,7 +15,7 @@ import Foundation
 ///
 /// Example:
 /// ```swift
-/// let record = ToolCallRecord(
+/// let record = ToolCallRecord.success(
 ///     toolName: "calculator",
 ///     arguments: ["operation": "add", "a": 5, "b": 3],
 ///     result: .int(8),
@@ -27,15 +27,28 @@ import Foundation
 /// print("Result: \(record.result)")        // "8"
 /// print("Duration: \(record.duration)")    // "0.05 seconds"
 /// ```
+///
+/// `ToolCallRecord` is a closed outcome: execution either succeeded with a value
+/// or failed with a message. Name, arguments, duration, and timestamp sit
+/// outside the outcome. Compatibility accessors (``isSuccess``, ``result``,
+/// ``errorMessage``) preserve the previous stored-property surface.
 public struct ToolCallRecord: Sendable, Equatable, Codable {
+    /// Closed success-or-failure payload for a recorded tool invocation.
+    public enum Outcome: Sendable, Equatable {
+        /// The tool returned a value.
+        case success(SendableValue)
+        /// The tool failed. `message` matches historical ``errorMessage`` semantics.
+        case failure(message: String)
+    }
+
+    /// Stable identifier shared with ``AgentResult`` tool calls when projected via ``AgentResponse/asResult``.
+    public let callId: UUID
+
     /// The name of the tool that was called.
     public let toolName: String
 
     /// The arguments passed to the tool.
     public let arguments: [String: SendableValue]
-
-    /// The result returned by the tool.
-    public let result: SendableValue
 
     /// How long the tool execution took.
     public let duration: Duration
@@ -43,38 +56,167 @@ public struct ToolCallRecord: Sendable, Equatable, Codable {
     /// When the tool call was initiated.
     public let timestamp: Date
 
+    /// Success value or failure message. Invalid combinations cannot be stored.
+    public let outcome: Outcome
+
+    /// The result returned by the tool.
+    ///
+    /// On failure this is always ``SendableValue/null``.
+    public var result: SendableValue {
+        switch outcome {
+        case let .success(value):
+            value
+        case .failure:
+            .null
+        }
+    }
+
     /// Whether the tool execution was successful.
-    public let isSuccess: Bool
+    public var isSuccess: Bool {
+        switch outcome {
+        case .success:
+            true
+        case .failure:
+            false
+        }
+    }
 
     /// Error message if the tool execution failed.
-    public let errorMessage: String?
+    public var errorMessage: String? {
+        switch outcome {
+        case .success:
+            nil
+        case let .failure(message):
+            message
+        }
+    }
 
-    /// Creates a new tool call record.
+    /// Creates a record from a closed outcome.
     ///
-    /// - Parameters:
-    ///   - toolName: The name of the tool that was called.
-    ///   - arguments: The arguments passed to the tool. Default: `[:]`
-    ///   - result: The result returned by the tool. Default: `.null`
-    ///   - duration: How long the tool execution took. Default: `.zero`
-    ///   - timestamp: When the tool call was initiated. Default: now
-    ///   - isSuccess: Whether the tool execution was successful. Default: `true`
-    ///   - errorMessage: Error message if the tool execution failed. Default: `nil`
+    /// Prefer ``success(toolName:arguments:result:duration:timestamp:)`` or
+    /// ``failure(toolName:arguments:error:duration:timestamp:)``.
     public init(
+        callId: UUID = TurnEnvironment.live.newUUID(),
+        toolName: String,
+        arguments: [String: SendableValue] = [:],
+        duration: Duration = .zero,
+        timestamp: Date = TurnEnvironment.live.now(),
+        outcome: Outcome
+    ) {
+        self.callId = callId
+        self.toolName = toolName
+        self.arguments = arguments
+        self.duration = duration
+        self.timestamp = timestamp
+        self.outcome = outcome
+    }
+
+    /// Creates a new tool call record from independently specified success flags.
+    ///
+    /// Prefer ``success(toolName:arguments:result:duration:timestamp:)`` or
+    /// ``failure(toolName:arguments:error:duration:timestamp:)``.
+    /// A failure with a nil message is stored as `"Tool execution failed"`.
+    /// Success ignores `errorMessage`; failure ignores `result`.
+    @available(*, deprecated, message: "Use ToolCallRecord.success(...) or .failure(...)")
+    public init(
+        callId: UUID = TurnEnvironment.live.newUUID(),
         toolName: String,
         arguments: [String: SendableValue] = [:],
         result: SendableValue = .null,
         duration: Duration = .zero,
-        timestamp: Date = Date(),
+        timestamp: Date = TurnEnvironment.live.now(),
         isSuccess: Bool = true,
         errorMessage: String? = nil
     ) {
+        self.callId = callId
         self.toolName = toolName
         self.arguments = arguments
-        self.result = result
         self.duration = duration
         self.timestamp = timestamp
-        self.isSuccess = isSuccess
-        self.errorMessage = errorMessage
+        if isSuccess {
+            outcome = .success(result)
+        } else {
+            outcome = .failure(message: errorMessage ?? "Tool execution failed")
+        }
+    }
+
+    /// Creates a successful tool call record.
+    public static func success(
+        callId: UUID = TurnEnvironment.live.newUUID(),
+        toolName: String,
+        arguments: [String: SendableValue] = [:],
+        result: SendableValue,
+        duration: Duration = .zero,
+        timestamp: Date = TurnEnvironment.live.now()
+    ) -> ToolCallRecord {
+        ToolCallRecord(
+            callId: callId,
+            toolName: toolName,
+            arguments: arguments,
+            duration: duration,
+            timestamp: timestamp,
+            outcome: .success(result)
+        )
+    }
+
+    /// Creates a failed tool call record.
+    public static func failure(
+        callId: UUID = TurnEnvironment.live.newUUID(),
+        toolName: String,
+        arguments: [String: SendableValue] = [:],
+        error: String,
+        duration: Duration = .zero,
+        timestamp: Date = TurnEnvironment.live.now()
+    ) -> ToolCallRecord {
+        ToolCallRecord(
+            callId: callId,
+            toolName: toolName,
+            arguments: arguments,
+            duration: duration,
+            timestamp: timestamp,
+            outcome: .failure(message: error)
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case callId
+        case toolName
+        case arguments
+        case result
+        case duration
+        case timestamp
+        case isSuccess
+        case errorMessage
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        callId = try container.decodeIfPresent(UUID.self, forKey: .callId) ?? TurnEnvironment.live.newUUID()
+        toolName = try container.decode(String.self, forKey: .toolName)
+        arguments = try container.decode([String: SendableValue].self, forKey: .arguments)
+        duration = try container.decode(Duration.self, forKey: .duration)
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+        let isSuccess = try container.decodeIfPresent(Bool.self, forKey: .isSuccess) ?? true
+        if isSuccess {
+            let result = try container.decodeIfPresent(SendableValue.self, forKey: .result) ?? .null
+            outcome = .success(result)
+        } else {
+            let message = try container.decodeIfPresent(String.self, forKey: .errorMessage)
+                ?? "Tool execution failed"
+            outcome = .failure(message: message)
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(callId, forKey: .callId)
+        try container.encode(toolName, forKey: .toolName)
+        try container.encode(arguments, forKey: .arguments)
+        try container.encode(result, forKey: .result)
+        try container.encode(duration, forKey: .duration)
+        try container.encode(timestamp, forKey: .timestamp)
+        try container.encode(isSuccess, forKey: .isSuccess)
+        try container.encodeIfPresent(errorMessage, forKey: .errorMessage)
     }
 }
 
@@ -124,7 +266,7 @@ extension ToolCallRecord: CustomDebugStringConvertible {
 ///     agentName: "CalculatorAgent",
 ///     metadata: ["confidence": 0.95],
 ///     toolCalls: [
-///         ToolCallRecord(
+///         ToolCallRecord.success(
 ///             toolName: "calculator",
 ///             arguments: ["expression": "6 * 7"],
 ///             result: .int(42),
@@ -180,17 +322,21 @@ public struct AgentResponse: Sendable {
     /// deriving it from tool call count.
     public let iterationCount: Int
 
-    /// Converts this response to an `AgentResult` for backward compatibility.
+    /// Lossy compatibility projection onto ``AgentResult``.
     ///
-    /// This computed property allows `AgentResponse` to be used in contexts
-    /// that expect `AgentResult`. The conversion maps:
+    /// Prefer ``AgentResult`` from ``Agent/run(_:session:observer:)`` when you
+    /// need the canonical execution model. This conversion maps:
     /// - `output` -> `output`
-    /// - `toolCalls` -> converted to `[ToolCall]` and `[ToolResult]`
+    /// - `toolCalls` -> `[ToolCall]` and `[ToolResult]` pairs using each record's ``ToolCallRecord/callId``
     /// - `usage` -> `tokenUsage`
     /// - `metadata` -> `metadata`
+    /// - `iterationCount` -> `iterationCount`
     ///
-    /// Note: Some information is lost in conversion (responseId, agentName,
-    /// timestamp at the response level).
+    /// It intentionally discards ``responseId``, ``agentName``, and the response
+    /// ``timestamp``. ``AgentResult/duration`` is the sum of recorded tool-call
+    /// durations, not wall-clock run time, and is `.zero` when no tools ran.
+    /// Tool-call identity is stable across repeated conversions because each
+    /// record's stored ``ToolCallRecord/callId`` is reused.
     ///
     /// Example:
     /// ```swift
@@ -199,28 +345,18 @@ public struct AgentResponse: Sendable {
     /// print(result.output)  // "Hello"
     /// ```
     public var asResult: AgentResult {
-        // Convert ToolCallRecords to ToolCalls and ToolResults
-        var convertedToolCalls: [ToolCall] = []
-        var convertedToolResults: [ToolResult] = []
-
-        for record in toolCalls {
-            let callId = UUID()
-            let toolCall = ToolCall(
-                id: callId,
+        let invocations = toolCalls.map { record in
+            let call = ToolCall(
+                id: record.callId,
                 toolName: record.toolName,
                 arguments: record.arguments,
                 timestamp: record.timestamp
             )
-            convertedToolCalls.append(toolCall)
-
-            let toolResult = ToolResult(
-                callId: callId,
-                isSuccess: record.isSuccess,
-                output: record.result,
+            return ToolInvocation(
+                call: call,
                 duration: record.duration,
-                errorMessage: record.errorMessage
+                outcome: ToolResult.Outcome(record.outcome)
             )
-            convertedToolResults.append(toolResult)
         }
 
         // Calculate total duration from tool calls
@@ -228,8 +364,7 @@ public struct AgentResponse: Sendable {
 
         return AgentResult(
             output: output,
-            toolCalls: convertedToolCalls,
-            toolResults: convertedToolResults,
+            invocations: invocations,
             iterationCount: iterationCount,
             duration: totalDuration,
             tokenUsage: usage,
@@ -249,10 +384,10 @@ public struct AgentResponse: Sendable {
     ///   - usage: Token usage if available. Default: `nil`
     ///   - iterationCount: Number of agent iterations. Default: `1`
     public init(
-        responseId: String = UUID().uuidString,
+        responseId: String = TurnEnvironment.live.newID(),
         output: String,
         agentName: String,
-        timestamp: Date = Date(),
+        timestamp: Date = TurnEnvironment.live.now(),
         metadata: [String: SendableValue] = [:],
         toolCalls: [ToolCallRecord] = [],
         usage: TokenUsage? = nil,
@@ -315,5 +450,29 @@ extension AgentResponse: CustomDebugStringConvertible {
             usage: \(String(describing: usage))
         )
         """
+    }
+}
+
+extension ToolCallRecord.Outcome {
+    /// Maps a ``ToolResult/Outcome`` onto the record's nested outcome.
+    public init(_ outcome: ToolResult.Outcome) {
+        switch outcome {
+        case let .success(value):
+            self = .success(value)
+        case let .failure(message):
+            self = .failure(message: message)
+        }
+    }
+}
+
+extension ToolResult.Outcome {
+    /// Maps a ``ToolCallRecord/Outcome`` onto the result's nested outcome.
+    public init(_ outcome: ToolCallRecord.Outcome) {
+        switch outcome {
+        case let .success(value):
+            self = .success(value)
+        case let .failure(message):
+            self = .failure(message: message)
+        }
     }
 }

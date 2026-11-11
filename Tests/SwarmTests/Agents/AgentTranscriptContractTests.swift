@@ -33,6 +33,18 @@ private actor NativeStructuredConversationProvider:
         structuredResult.rawJSON
     }
 
+    func generate(messages _: [InferenceMessage], options _: InferenceOptions) async throws -> String {
+        structuredResult.rawJSON
+    }
+
+    func generateWithToolCalls(
+        messages _: [InferenceMessage],
+        tools _: [ToolSchema],
+        options _: InferenceOptions
+    ) async throws -> InferenceResponse {
+        InferenceResponse(content: structuredResult.rawJSON, finishReason: .completed)
+    }
+
     nonisolated func stream(prompt _: String, options _: InferenceOptions) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             continuation.finish(throwing: AgentError.internalError(reason: "Unexpected streaming call"))
@@ -53,6 +65,44 @@ private actor NativeStructuredConversationProvider:
     }
 }
 
+/// Structured backend that implements `generateStructured(messages:)`.
+private actor NativeStructuredPromptOnlyProvider: InferenceProvider {
+    nonisolated let capabilities: InferenceProviderCapabilities = [.conversationMessages, .structuredOutputs]
+
+    private let structuredResult: StructuredOutputResult
+    private var structuredMessageCalls: [([InferenceMessage], StructuredOutputRequest)] = []
+
+    init(structuredResult: StructuredOutputResult) {
+        self.structuredResult = structuredResult
+    }
+
+    func generate(messages _: [InferenceMessage], options _: InferenceOptions) async throws -> String {
+        structuredResult.rawJSON
+    }
+
+    func generateWithToolCalls(
+        messages _: [InferenceMessage],
+        tools _: [ToolSchema],
+        options _: InferenceOptions,
+        toolExecutor _: ToolCallExecutor?
+    ) async throws -> InferenceResponse {
+        InferenceResponse(content: structuredResult.rawJSON, finishReason: .completed)
+    }
+
+    func generateStructured(
+        messages: [InferenceMessage],
+        request: StructuredOutputRequest,
+        options _: InferenceOptions
+    ) async throws -> StructuredOutputResult {
+        structuredMessageCalls.append((messages, request))
+        return structuredResult
+    }
+
+    func recordedStructuredMessageCalls() -> [([InferenceMessage], StructuredOutputRequest)] {
+        structuredMessageCalls
+    }
+}
+
 private func metadataString(
     _ key: String,
     from metadata: [String: SendableValue]
@@ -60,8 +110,9 @@ private func metadataString(
     metadata[key]?.stringValue
 }
 
-@Suite("Agent Transcript Contract")
+@Suite("Agent Transcript Contract", .ephemeralDefaultStores)
 struct AgentTranscriptContractTests {
+
     @Test("runStructured uses prompt fallback and persists structured transcript metadata")
     func runStructuredPromptFallbackPersistsTranscriptMetadata() async throws {
         let provider = MockInferenceProvider(responses: [#"{"answer":"ok"}"#])
@@ -84,7 +135,10 @@ struct AgentTranscriptContractTests {
 
         let messageCalls = await provider.generateMessageCalls
         #expect(messageCalls.count == 1)
-        #expect(messageCalls.first?.messages.last?.content.contains("Respond with valid JSON only.") == true)
+        let contents = messageCalls.first?.messages.map(\.content) ?? []
+        #expect(contents.contains(where: { $0.contains("Return a JSON answer.") }))
+        #expect(contents.contains(where: { $0.contains("Respond with valid JSON only.") }))
+        #expect(await provider.generateCalls.isEmpty)
 
         let storedMessages = try await session.getAllItems()
         #expect(storedMessages.count == 2)
@@ -133,6 +187,64 @@ struct AgentTranscriptContractTests {
         #expect(transcript.entries.last?.structuredOutput?.result.source == .providerNative)
     }
 
+    @Test("runStructured uses generateStructured(messages:)")
+    func runStructuredPrefersNativeStructuredPromptProviders() async throws {
+        let structuredResult = StructuredOutputResult(
+            format: .jsonSchema(
+                name: "Answer",
+                schemaJSON: #"{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}"#
+            ),
+            rawJSON: #"{"answer":"native-prompt"}"#,
+            value: .dictionary(["answer": .string("native-prompt")]),
+            source: .providerNative
+        )
+        let provider = NativeStructuredPromptOnlyProvider(structuredResult: structuredResult)
+        let session = InMemorySession(sessionId: "structured-native-prompt")
+        let agent = try Agent(
+            instructions: "Return structured JSON.",
+            inferenceProvider: provider
+        )
+        let request = StructuredOutputRequest(format: structuredResult.format)
+
+        let result = try await agent.runStructured("Return native JSON.", request: request, session: session)
+
+        #expect(result.agentResult.output == structuredResult.rawJSON)
+        #expect(result.structuredOutput == structuredResult)
+        #expect(result.structuredOutput.source == .providerNative)
+        #expect(metadataString("structured_output.source", from: result.agentResult.metadata) == "provider_native")
+        #expect(metadataString("structured_output.format", from: result.agentResult.metadata) == "json_schema:Answer")
+
+        let calls = await provider.recordedStructuredMessageCalls()
+        #expect(calls.count == 1)
+        #expect(calls.first?.1 == request)
+        #expect(calls.first?.0.contains(where: { $0.role == .user && $0.content.contains("Return native JSON.") }) == true)
+
+        let transcript = SwarmTranscript(memoryMessages: try await session.getAllItems())
+        try transcript.validateReplayCompatibility()
+        #expect(transcript.entries.last?.structuredOutput?.result.source == .providerNative)
+    }
+
+    @Test("tool-loop text parse does not claim providerNative from capabilities")
+    func toolLoopStructuredParseDoesNotClaimProviderNative() async throws {
+        let provider = MockInferenceProvider(
+            capabilities: [.structuredOutputs, .conversationMessages, .nativeToolCalling]
+        )
+        await provider.setToolCallResponses([
+            InferenceResponse(content: #"{"answer":"ok"}"#, finishReason: .completed),
+        ])
+        let agent = try Agent(
+            tools: [MockTool(name: "noop", result: .string("unused"))],
+            instructions: "Return structured JSON.",
+            inferenceProvider: provider
+        )
+        let result = try await agent.runStructured(
+            "Return a JSON answer.",
+            request: StructuredOutputRequest(format: .jsonObject)
+        )
+        #expect(result.structuredOutput.source == .promptFallback)
+        #expect(metadataString("structured_output.source", from: result.agentResult.metadata) == "prompt_fallback")
+    }
+
     @Test("InMemorySession branch keeps transcript replay-compatible and isolated")
     func inMemorySessionBranchKeepsTranscriptReplayCompatible() async throws {
         let provider = MockInferenceProvider()
@@ -178,8 +290,9 @@ struct AgentTranscriptContractTests {
 }
 
 #if canImport(SwiftData)
-@Suite("Persistent Transcript Contract")
+@Suite("Persistent Transcript Contract", .ephemeralDefaultStores)
 struct PersistentTranscriptContractTests {
+
     @Test("PersistentSession in-memory branch keeps transcript replay-compatible")
     func persistentSessionBranchKeepsTranscriptReplayCompatible() async throws {
         let provider = MockInferenceProvider()

@@ -9,7 +9,7 @@ import Foundation
 // MARK: - MockMCPServer
 
 /// A mock MCP server for testing MCPClient behavior.
-actor MockMCPServer: MCPServer {
+actor MockMCPServer: MCPServerConnection {
     let name: String
     var capabilitiesToReturn: MCPCapabilities
     var toolsToReturn: [ToolSchema]
@@ -26,7 +26,7 @@ actor MockMCPServer: MCPServer {
     private(set) var callToolHistory: [(name: String, arguments: [String: SendableValue])] = []
     private(set) var readResourceHistory: [String] = []
 
-    // MARK: - MCPServer Protocol
+    // MARK: - MCPServerConnection Protocol
 
     nonisolated var capabilities: MCPCapabilities {
         get async {

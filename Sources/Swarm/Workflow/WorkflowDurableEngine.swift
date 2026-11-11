@@ -1,3 +1,4 @@
+#if SWARM_INTEGRATIONS
 import Dispatch
 import Foundation
 import HiveCore
@@ -12,6 +13,34 @@ enum WorkflowDurableInput: Sendable {
     case resume
 }
 
+/// Closed run-state phase for durable workflows.
+///
+/// The phase is the single checkpointed carrier of workflow progress: either the
+/// run is mid-flight (`running`, with its cursors and most recent step result) or
+/// it has terminated (`completed`, carrying the final result). Because the
+/// cursors live inside `running`'s payload, a completed run can never coexist
+/// with pending cursor state — the illegal combination is unrepresentable by
+/// construction rather than guarded at runtime.
+///
+/// Note: `lastResult` rides inside `running` (instead of a parallel result
+/// channel) because completion and repeat-boundary evaluation happen in later
+/// supersteps than the last step write; the snapshot must survive the store
+/// round-trip so resumed runs return and evaluate the full ``AgentResult``.
+///
+/// Cursor *values* cannot be forbidden structurally (`Int` associated values),
+/// so the non-negative invariant is enforced once at the domain-read boundary
+/// in ``workflowNode(_:)-swift.func``, where every resume — migrated legacy or
+/// native — crosses back into engine logic.
+enum WorkflowDurablePhase: Codable, Sendable, Equatable {
+    /// The run is still executing. `stepCursor` indexes the next step to run;
+    /// `iterationCursor` counts completed passes of a repeating workflow;
+    /// `lastResult` is the most recent step result, or nil before the first
+    /// step commits.
+    case running(stepCursor: Int, iterationCursor: Int, lastResult: WorkflowResultSnapshot?)
+    /// The run has finished. Carries the workflow's final result.
+    case completed(WorkflowResultSnapshot)
+}
+
 struct WorkflowDurableSchema: HiveSchema {
     typealias Context = WorkflowDurableContext
     typealias Input = WorkflowDurableInput
@@ -19,11 +48,8 @@ struct WorkflowDurableSchema: HiveSchema {
     typealias ResumePayload = String
 
     static let currentInputKey = HiveChannelKey<Self, String>(HiveChannelID("workflow.currentInput"))
-    static let lastResultKey = HiveChannelKey<Self, WorkflowResultSnapshot?>(HiveChannelID("workflow.lastResult"))
-    static let stepCursorKey = HiveChannelKey<Self, Int>(HiveChannelID("workflow.stepCursor"))
-    static let iterationCursorKey = HiveChannelKey<Self, Int>(HiveChannelID("workflow.iterationCursor"))
-    static let completedKey = HiveChannelKey<Self, Bool>(HiveChannelID("workflow.completed"))
     static let signatureKey = HiveChannelKey<Self, String>(HiveChannelID("workflow.signature"))
+    static let phaseKey = HiveChannelKey<Self, WorkflowDurablePhase>(HiveChannelID("workflow.phase"))
 
     static var channelSpecs: [AnyHiveChannelSpec<Self>] {
         [
@@ -40,56 +66,23 @@ struct WorkflowDurableSchema: HiveSchema {
             ),
             AnyHiveChannelSpec(
                 HiveChannelSpec(
-                    key: lastResultKey,
-                    scope: .global,
-                    reducer: .lastWriteWins(),
-                    updatePolicy: .single,
-                    initial: { Optional<WorkflowResultSnapshot>.none },
-                    codec: HiveAnyCodec(WorkflowCheckpointCodec<WorkflowResultSnapshot?>()),
-                    persistence: .checkpointed
-                )
-            ),
-            AnyHiveChannelSpec(
-                HiveChannelSpec(
-                    key: stepCursorKey,
-                    scope: .global,
-                    reducer: .lastWriteWins(),
-                    updatePolicy: .single,
-                    initial: { 0 },
-                    codec: HiveAnyCodec(WorkflowCheckpointCodec<Int>()),
-                    persistence: .checkpointed
-                )
-            ),
-            AnyHiveChannelSpec(
-                HiveChannelSpec(
-                    key: iterationCursorKey,
-                    scope: .global,
-                    reducer: .lastWriteWins(),
-                    updatePolicy: .single,
-                    initial: { 0 },
-                    codec: HiveAnyCodec(WorkflowCheckpointCodec<Int>()),
-                    persistence: .checkpointed
-                )
-            ),
-            AnyHiveChannelSpec(
-                HiveChannelSpec(
-                    key: completedKey,
-                    scope: .global,
-                    reducer: .lastWriteWins(),
-                    updatePolicy: .single,
-                    initial: { false },
-                    codec: HiveAnyCodec(WorkflowCheckpointCodec<Bool>()),
-                    persistence: .checkpointed
-                )
-            ),
-            AnyHiveChannelSpec(
-                HiveChannelSpec(
                     key: signatureKey,
                     scope: .global,
                     reducer: .lastWriteWins(),
                     updatePolicy: .single,
                     initial: { "" },
                     codec: HiveAnyCodec(WorkflowCheckpointCodec<String>()),
+                    persistence: .checkpointed
+                )
+            ),
+            AnyHiveChannelSpec(
+                HiveChannelSpec(
+                    key: phaseKey,
+                    scope: .global,
+                    reducer: .lastWriteWins(),
+                    updatePolicy: .single,
+                    initial: { WorkflowDurablePhase.running(stepCursor: 0, iterationCursor: 0, lastResult: nil) },
+                    codec: HiveAnyCodec(WorkflowCheckpointCodec<WorkflowDurablePhase>()),
                     persistence: .checkpointed
                 )
             ),
@@ -101,11 +94,8 @@ struct WorkflowDurableSchema: HiveSchema {
         case .start(let input, let signature):
             return [
                 AnyHiveWrite(currentInputKey, input),
-                AnyHiveWrite(lastResultKey, Optional<WorkflowResultSnapshot>.none),
-                AnyHiveWrite(stepCursorKey, 0),
-                AnyHiveWrite(iterationCursorKey, 0),
-                AnyHiveWrite(completedKey, false),
                 AnyHiveWrite(signatureKey, signature),
+                AnyHiveWrite(phaseKey, WorkflowDurablePhase.running(stepCursor: 0, iterationCursor: 0, lastResult: nil)),
             ]
 
         case .resume:
@@ -121,7 +111,19 @@ struct WorkflowDurableEngine: Sendable {
     let policy: Workflow.Durable.CheckpointPolicy
     let resume: Bool
 
+    /// Single Integrations-engine conversion from a typed checkpoint identity to a Hive thread ID.
+    /// Callers must not construct `HiveThreadID` from an arbitrary session string.
+    static func hiveThreadID(for checkpointID: WorkflowCheckpointID) -> HiveThreadID {
+        HiveThreadID(checkpointID.rawValue)
+    }
+
     func run(startInput: String) async throws -> AgentResult {
+        if let error = WorkflowTransition.validationError(for: workflow.workflowTransitionPolicy) {
+            throw error
+        }
+        if let controller = WorkflowDurableFaultInjection.controller {
+            await controller.beginAttempt()
+        }
         let graph = try makeGraph()
         let context = WorkflowDurableContext(
             workflow: workflow,
@@ -132,11 +134,17 @@ struct WorkflowDurableEngine: Sendable {
             context: context,
             clock: WorkflowDurableClock(),
             logger: WorkflowDurableLogger(),
-            checkpointStore: checkpointing.runtimeStore
+            checkpointStore: faultInjectingStore(wrapping: AnyHiveCheckpointStore(
+                WorkflowLegacyMigratingCheckpointStore(
+                    inner: checkpointing.runtimeStore,
+                    schemaVersion: graph.schemaVersion,
+                    graphVersion: graph.graphVersion
+                )
+            ))
         )
 
         let runtime = try HiveRuntime(graph: graph, environment: environment)
-        let threadID = HiveThreadID(checkpointID)
+        let threadID = Self.hiveThreadID(for: WorkflowCheckpointID(checkpointID))
 
         if resume {
             guard try await checkpointing.containsCheckpoint(for: checkpointID) else {
@@ -169,12 +177,20 @@ struct WorkflowDurableEngine: Sendable {
         return result
     }
 
+    private func faultInjectingStore(
+        wrapping store: AnyHiveCheckpointStore<WorkflowDurableSchema>
+    ) -> AnyHiveCheckpointStore<WorkflowDurableSchema> {
+        guard WorkflowDurableFaultInjection.controller != nil else {
+            return store
+        }
+        return AnyHiveCheckpointStore(WorkflowFaultInjectingCheckpointStore(inner: store))
+    }
+
     private func makeGraph() throws -> CompiledHiveGraph<WorkflowDurableSchema> {
         var builder = HiveGraphBuilder<WorkflowDurableSchema>(start: [WorkflowNodeID.execute])
         builder.addNode(WorkflowNodeID.execute, workflowNode)
         builder.addRouter(from: WorkflowNodeID.execute) { store in
-            let completed = (try? store.get(WorkflowDurableSchema.completedKey)) ?? false
-            return completed ? .end : .to([WorkflowNodeID.execute])
+            WorkflowDurableRouting.route(for: Result { try store.get(WorkflowDurableSchema.phaseKey) })
         }
         return try builder.compile()
     }
@@ -221,23 +237,69 @@ struct WorkflowDurableEngine: Sendable {
         }
     }
 
-    private func extractResult(from output: HiveRunOutput<WorkflowDurableSchema>) throws -> AgentResult {
+    fileprivate func extractResult(from output: HiveRunOutput<WorkflowDurableSchema>) throws -> AgentResult {
         switch output {
         case .fullStore(let store):
-            if let snapshot = try store.get(WorkflowDurableSchema.lastResultKey) {
+            let phase = try store.get(WorkflowDurableSchema.phaseKey)
+            switch phase {
+            case .completed(let snapshot):
                 return snapshot.agentResult
+            case .running(_, _, let lastResult):
+                if let lastResult {
+                    return lastResult.agentResult
+                }
+                return AgentResult(output: try store.get(WorkflowDurableSchema.currentInputKey))
             }
-            let currentInput = try store.get(WorkflowDurableSchema.currentInputKey)
-            return AgentResult(output: currentInput)
 
         case .channels(let values):
-            if let snapshot = values.first(where: { $0.id == WorkflowDurableSchema.lastResultKey.id })?.value as? WorkflowResultSnapshot {
-                return snapshot.agentResult
+            guard let value = values.first(where: { $0.id == WorkflowDurableSchema.phaseKey.id })?.value
+            else {
+                throw WorkflowError.invalidWorkflow(reason: "Durable workflow finished without a phase channel")
             }
-            if let currentInput = values.first(where: { $0.id == WorkflowDurableSchema.currentInputKey.id })?.value as? String {
+            guard let phase = value as? WorkflowDurablePhase else {
+                throw WorkflowError.invalidWorkflow(reason: "Durable workflow phase channel has an invalid type")
+            }
+            switch phase {
+            case .completed(let snapshot):
+                return snapshot.agentResult
+            case .running(_, _, let lastResult):
+                if let lastResult {
+                    return lastResult.agentResult
+                }
+                guard let currentInput = values.first(where: { $0.id == WorkflowDurableSchema.currentInputKey.id })?
+                    .value as? String else {
+                    throw WorkflowError.invalidWorkflow(
+                        reason: "Durable workflow running phase is missing a current input channel"
+                    )
+                }
                 return AgentResult(output: currentInput)
             }
-            return AgentResult(output: "")
+        }
+    }
+}
+
+/// Non-throwing router decision for the durable execute node.
+///
+/// Routers cannot throw, so the phase-channel read arrives as a `Result`. Only
+/// a genuinely missing value means "no checkpoint state yet" and restarts from
+/// step 0. Any other store error (type mismatch, unknown channel, scope
+/// mismatch) signals corruption: routing to `.end` lets result extraction
+/// re-read the phase channel on its throwing path and surface the underlying
+/// error instead of silently re-running steps from the start.
+enum WorkflowDurableRouting: Sendable {
+    static func route(for phaseResult: Result<WorkflowDurablePhase, Error>) -> Route {
+        switch phaseResult {
+        case .success(let phase):
+            if case .completed = phase {
+                return .end
+            }
+            return .to([WorkflowNodeID.execute])
+        case .failure(let error):
+            if let runtimeError = error as? HiveRuntimeError,
+               case .storeValueMissing = runtimeError {
+                return .to([WorkflowNodeID.execute])
+            }
+            return .end
         }
     }
 }
@@ -248,69 +310,102 @@ private enum WorkflowNodeID {
 
 private func workflowNode(_ input: HiveNodeInput<WorkflowDurableSchema>) async throws -> HiveNodeOutput<WorkflowDurableSchema> {
     let checkpointSignature = try input.store.get(WorkflowDurableSchema.signatureKey)
-    if checkpointSignature != input.context.signature {
-        throw WorkflowError.resumeDefinitionMismatch(
-            reason: "Workflow signature mismatch between checkpoint and current definition"
-        )
+    if let mismatch = workflowDurableSignatureMismatch(
+        checkpointSignature: checkpointSignature,
+        currentSignature: input.context.signature
+    ) {
+        throw mismatch
     }
 
-    let completed = try input.store.get(WorkflowDurableSchema.completedKey)
-    if completed {
+    let phase = try input.store.get(WorkflowDurableSchema.phaseKey)
+    guard case .running(let stepCursor, let iterationCursor, let lastResult) = phase else {
         return HiveNodeOutput(next: .end)
     }
-
     let currentInput = try input.store.get(WorkflowDurableSchema.currentInputKey)
-    let lastResultSnapshot = try input.store.get(WorkflowDurableSchema.lastResultKey)
-    var stepCursor = try input.store.get(WorkflowDurableSchema.stepCursorKey)
-    var iterationCursor = try input.store.get(WorkflowDurableSchema.iterationCursorKey)
+    let progress = WorkflowTransition.Progress(
+        stepCursor: stepCursor,
+        iterationCursor: iterationCursor,
+        currentInput: currentInput,
+        lastResult: lastResult?.agentResult
+    )
+    let policy = input.context.workflow.workflowTransitionPolicy
 
-    if stepCursor >= input.context.workflow.steps.count {
-        if let repeatCondition = input.context.workflow.repeatCondition {
-            let lastResult = lastResultSnapshot?.agentResult ?? AgentResult(output: currentInput)
-            if repeatCondition(lastResult) {
-                return HiveNodeOutput(
-                    writes: [AnyHiveWrite(WorkflowDurableSchema.completedKey, true)],
-                    next: .end
-                )
-            }
-
-            let nextIteration = iterationCursor + 1
-            if nextIteration >= input.context.workflow.maxRepeatIterations {
-                return HiveNodeOutput(
-                    writes: [AnyHiveWrite(WorkflowDurableSchema.completedKey, true)],
-                    next: .end
-                )
-            }
-
-            stepCursor = 0
-            iterationCursor = nextIteration
-
-            return HiveNodeOutput(
-                writes: [
-                    AnyHiveWrite(WorkflowDurableSchema.stepCursorKey, stepCursor),
-                    AnyHiveWrite(WorkflowDurableSchema.iterationCursorKey, iterationCursor),
-                    AnyHiveWrite(WorkflowDurableSchema.currentInputKey, lastResult.output),
-                ]
-            )
+    switch WorkflowTransition.decide(progress: progress, policy: policy) {
+    case .runStep(let progress):
+        let step = input.context.workflow.steps[progress.stepCursor]
+        if let controller = WorkflowDurableFaultInjection.controller {
+            await controller.markWorkflowStepStarted()
         }
-
-        return HiveNodeOutput(
-            writes: [AnyHiveWrite(WorkflowDurableSchema.completedKey, true)],
-            next: .end
+        let result = try await input.context.workflow.execute(step: step, withInput: progress.currentInput)
+        let nextDecision = WorkflowTransition.afterStep(
+            progress: progress,
+            result: result,
+            policy: policy
         )
+        let nextProgress = try progressValue(from: nextDecision)
+        return runningOutput(for: nextProgress)
+
+    case .evaluateRepeat(let progress, let result):
+        guard let repeatCondition = input.context.workflow.repeatCondition else {
+            throw WorkflowError.invalidWorkflow(reason: "workflow repeat predicate is missing")
+        }
+        let nextDecision = WorkflowTransition.afterRepeatBoundary(
+            progress: progress,
+            result: result,
+            outcome: repeatCondition(result) ? .satisfied : .notSatisfied,
+            policy: policy
+        )
+        return try output(for: nextDecision)
+
+    case .complete(_, let result):
+        return completedOutput(for: result)
+
+    case .fail(let error):
+        throw error
     }
+}
 
-    let step = input.context.workflow.steps[stepCursor]
-    let result = try await input.context.workflow.execute(step: step, withInput: currentInput)
-    let snapshot = WorkflowResultSnapshot(result)
+private func progressValue(from decision: WorkflowTransition.Decision) throws -> WorkflowTransition.Progress {
+    switch decision {
+    case .runStep(let progress), .evaluateRepeat(let progress, _), .complete(let progress, _):
+        return progress
+    case .fail(let error):
+        throw error
+    }
+}
 
-    return HiveNodeOutput(
+private func runningOutput(for progress: WorkflowTransition.Progress) -> HiveNodeOutput<WorkflowDurableSchema> {
+    HiveNodeOutput(
         writes: [
-            AnyHiveWrite(WorkflowDurableSchema.lastResultKey, Optional(snapshot)),
-            AnyHiveWrite(WorkflowDurableSchema.currentInputKey, result.output),
-            AnyHiveWrite(WorkflowDurableSchema.stepCursorKey, stepCursor + 1),
+            AnyHiveWrite(
+                WorkflowDurableSchema.phaseKey,
+                .running(
+                    stepCursor: progress.stepCursor,
+                    iterationCursor: progress.iterationCursor,
+                    lastResult: progress.lastResult.map { WorkflowResultSnapshot($0) }
+                )
+            ),
+            AnyHiveWrite(WorkflowDurableSchema.currentInputKey, progress.currentInput),
         ]
     )
+}
+
+private func completedOutput(for result: AgentResult) -> HiveNodeOutput<WorkflowDurableSchema> {
+    HiveNodeOutput(
+        writes: [AnyHiveWrite(WorkflowDurableSchema.phaseKey, .completed(WorkflowResultSnapshot(result)))],
+        next: .end
+    )
+}
+
+private func output(for decision: WorkflowTransition.Decision) throws -> HiveNodeOutput<WorkflowDurableSchema> {
+    switch decision {
+    case .runStep(let progress), .evaluateRepeat(let progress, _):
+        return runningOutput(for: progress)
+    case .complete(_, let result):
+        return completedOutput(for: result)
+    case .fail(let error):
+        throw error
+    }
 }
 
 private struct WorkflowDurableClock: HiveClock {
@@ -328,3 +423,251 @@ private struct WorkflowDurableLogger: HiveLogger {
     func info(_ message: String, metadata: [String: String]) {}
     func error(_ message: String, metadata: [String: String]) {}
 }
+
+enum WorkflowDurableFaultPoint: Sendable, Equatable {
+    case beforeCheckpointWrite
+    case afterCheckpointWrite
+    case midStep
+}
+
+struct WorkflowDurableInjectedFault: Error, Sendable, Equatable {
+    let point: WorkflowDurableFaultPoint
+}
+
+enum WorkflowDurableFaultInjection {
+    @TaskLocal static var controller: WorkflowDurableFaultController?
+}
+
+actor WorkflowDurableFaultController {
+    private var queue: [WorkflowDurableFaultPoint]
+    private(set) var injected: [WorkflowDurableFaultPoint] = []
+    private var workflowStepStarted = false
+    private var injectedThisAttempt = false
+
+    init(queue: [WorkflowDurableFaultPoint]) {
+        self.queue = queue
+    }
+
+    func beginAttempt() {
+        workflowStepStarted = false
+        injectedThisAttempt = false
+    }
+
+    func markWorkflowStepStarted() {
+        workflowStepStarted = true
+    }
+
+    func consumeMidStep() throws {
+        try consume(.midStep, requireWorkflowStep: false)
+    }
+
+    func consumeBeforeWrite() throws {
+        try consume(.beforeCheckpointWrite, requireWorkflowStep: true)
+    }
+
+    func consumeAfterWrite() throws {
+        try consume(.afterCheckpointWrite, requireWorkflowStep: true)
+    }
+
+    private func consume(_ point: WorkflowDurableFaultPoint, requireWorkflowStep: Bool) throws {
+        guard !injectedThisAttempt, queue.first == point else { return }
+        if requireWorkflowStep, !workflowStepStarted { return }
+        queue.removeFirst()
+        injected.append(point)
+        injectedThisAttempt = true
+        throw WorkflowDurableInjectedFault(point: point)
+    }
+}
+
+actor WorkflowFaultInjectingCheckpointStore: HiveCheckpointStore {
+    typealias Schema = WorkflowDurableSchema
+
+    private let inner: AnyHiveCheckpointStore<WorkflowDurableSchema>
+
+    init(inner: AnyHiveCheckpointStore<WorkflowDurableSchema>) {
+        self.inner = inner
+    }
+
+    func save(_ checkpoint: HiveCheckpoint<WorkflowDurableSchema>) async throws {
+        if let controller = WorkflowDurableFaultInjection.controller {
+            try await controller.consumeBeforeWrite()
+        }
+        try await inner.save(checkpoint)
+        if let controller = WorkflowDurableFaultInjection.controller {
+            try await controller.consumeAfterWrite()
+        }
+    }
+
+    func loadLatest(threadID: HiveThreadID) async throws -> HiveCheckpoint<WorkflowDurableSchema>? {
+        try await inner.loadLatest(threadID: threadID)
+    }
+}
+
+/// Checkpoint store wrapper that migrates pre-phase-enum checkpoints on load.
+///
+/// Loads matching the current schema version pass through untouched; anything
+/// else is offered to ``WorkflowLegacyCheckpointMigrator`` so durable runs
+/// checkpointed by earlier Swarm releases resume instead of failing with a
+/// version mismatch.
+private struct WorkflowLegacyMigratingCheckpointStore: HiveCheckpointStore {
+    typealias Schema = WorkflowDurableSchema
+
+    private let inner: AnyHiveCheckpointStore<Schema>
+    private let schemaVersion: String
+    private let graphVersion: String
+
+    init(
+        inner: AnyHiveCheckpointStore<Schema>,
+        schemaVersion: String,
+        graphVersion: String
+    ) {
+        self.inner = inner
+        self.schemaVersion = schemaVersion
+        self.graphVersion = graphVersion
+    }
+
+    func save(_ checkpoint: HiveCheckpoint<Schema>) async throws {
+        try await inner.save(checkpoint)
+    }
+
+    func loadLatest(threadID: HiveThreadID) async throws -> HiveCheckpoint<Schema>? {
+        guard let checkpoint = try await inner.loadLatest(threadID: threadID) else { return nil }
+        guard checkpoint.schemaVersion != schemaVersion else { return checkpoint }
+        return try WorkflowLegacyCheckpointMigrator.migrate(
+            checkpoint,
+            schemaVersion: schemaVersion,
+            graphVersion: graphVersion
+        )
+    }
+}
+
+/// Rewrites checkpoints persisted in the pre-phase-enum six-channel layout into
+/// the current three-channel phase-enum layout.
+///
+/// The legacy channels (`workflow.currentInput`, `workflow.lastResult`,
+/// `workflow.stepCursor`, `workflow.iterationCursor`, `workflow.completed`,
+/// `workflow.signature`) are decoded with the same deterministic JSON codecs
+/// that wrote them, then folded into one ``WorkflowDurablePhase``:
+/// `completed == true` becomes `.completed` (synthesizing the result from the
+/// current input when no step ever committed), otherwise `.running` carries the
+/// cursors and snapshot forward. A synthesized completion cannot leave pending
+/// cursors behind because the cursors are dropped with the legacy layout.
+///
+/// Version bookkeeping (`channelVersionsByChannelID`, `versionsSeenByNodeID`,
+/// `updatedChannelsLastCommit`) is pruned to channel IDs the current schema
+/// still registers: legacy checkpoints carry the removed channel IDs in these
+/// maps, and the runtime rejects any unknown ID there as corrupt. Surviving
+/// channels keep their write history; the phase channel starts at version 0
+/// like any newly registered channel.
+///
+/// Checkpoints without the legacy discriminator channel are returned untouched
+/// so the runtime raises its regular version-mismatch error rather than
+/// guessing at an unknown format.
+enum WorkflowLegacyCheckpointMigrator {
+    static func migrate(
+        _ checkpoint: HiveCheckpoint<WorkflowDurableSchema>,
+        schemaVersion: String,
+        graphVersion: String
+    ) throws -> HiveCheckpoint<WorkflowDurableSchema> {
+        let legacyData = checkpoint.globalDataByChannelID
+        guard legacyData[LegacyRunState.completedChannelID] != nil else {
+            return checkpoint
+        }
+
+        let legacy = try LegacyRunState(globalDataByChannelID: legacyData)
+        let phase: WorkflowDurablePhase
+        if legacy.completed {
+            phase = .completed(legacy.lastResult ?? WorkflowResultSnapshot(AgentResult(output: legacy.currentInput)))
+        } else {
+            phase = .running(
+                stepCursor: legacy.stepCursor,
+                iterationCursor: legacy.iterationCursor,
+                lastResult: legacy.lastResult
+            )
+        }
+
+        var migratedData: [String: Data] = [:]
+        migratedData[WorkflowDurableSchema.phaseKey.id.rawValue] =
+            try WorkflowCheckpointCodec<WorkflowDurablePhase>().encode(phase)
+        migratedData[WorkflowDurableSchema.currentInputKey.id.rawValue] =
+            try WorkflowCheckpointCodec<String>().encode(legacy.currentInput)
+        migratedData[WorkflowDurableSchema.signatureKey.id.rawValue] =
+            try WorkflowCheckpointCodec<String>().encode(legacy.signature)
+
+        let registeredGlobalIDs = Set(
+            WorkflowDurableSchema.channelSpecs
+                .filter { $0.scope == .global }
+                .map { $0.id.rawValue }
+        )
+
+        return HiveCheckpoint(
+            id: checkpoint.id,
+            threadID: checkpoint.threadID,
+            runID: checkpoint.runID,
+            stepIndex: checkpoint.stepIndex,
+            schemaVersion: schemaVersion,
+            graphVersion: graphVersion,
+            checkpointFormatVersion: checkpoint.checkpointFormatVersion,
+            channelVersionsByChannelID: checkpoint.channelVersionsByChannelID
+                .filter { registeredGlobalIDs.contains($0.key) },
+            versionsSeenByNodeID: checkpoint.versionsSeenByNodeID.mapValues { versions in
+                versions.filter { registeredGlobalIDs.contains($0.key) }
+            },
+            updatedChannelsLastCommit: checkpoint.updatedChannelsLastCommit
+                .filter { registeredGlobalIDs.contains($0) },
+            globalDataByChannelID: migratedData,
+            frontier: checkpoint.frontier,
+            deferredFrontier: checkpoint.deferredFrontier,
+            joinBarrierSeenByJoinID: checkpoint.joinBarrierSeenByJoinID,
+            interruption: checkpoint.interruption,
+            lineage: checkpoint.lineage
+        )
+    }
+}
+
+/// Channel identifiers and decoded values of the pre-phase-enum durable layout.
+private struct LegacyRunState {
+    static let currentInputChannelID = "workflow.currentInput"
+    static let signatureChannelID = "workflow.signature"
+    static let stepCursorChannelID = "workflow.stepCursor"
+    static let iterationCursorChannelID = "workflow.iterationCursor"
+    static let completedChannelID = "workflow.completed"
+    static let lastResultChannelID = "workflow.lastResult"
+
+    let currentInput: String
+    let signature: String
+    let stepCursor: Int
+    let iterationCursor: Int
+    let completed: Bool
+    let lastResult: WorkflowResultSnapshot?
+
+    init(globalDataByChannelID data: [String: Data]) throws {
+        // Missing entries fall back to start-of-run values; entries that are
+        // present but undecodable fail loudly instead of fabricating state.
+        currentInput = try Self.decoded(data[Self.currentInputChannelID], as: String.self) ?? ""
+        signature = try Self.decoded(data[Self.signatureChannelID], as: String.self) ?? ""
+        stepCursor = try Self.decoded(data[Self.stepCursorChannelID], as: Int.self) ?? 0
+        iterationCursor = try Self.decoded(data[Self.iterationCursorChannelID], as: Int.self) ?? 0
+        completed = try Self.decoded(data[Self.completedChannelID], as: Bool.self) ?? false
+        lastResult = try Self.decoded(data[Self.lastResultChannelID], as: WorkflowResultSnapshot?.self) ?? nil
+    }
+
+    private static func decoded<Value: Codable & Sendable>(_ data: Data?, as _: Value.Type) throws -> Value? {
+        guard let data else { return nil }
+        return try WorkflowCheckpointCodec<Value>().decode(data)
+    }
+}
+
+enum WorkflowDurableEngineTesting {
+    static func extractResult(from output: HiveRunOutput<WorkflowDurableSchema>) throws -> AgentResult {
+        let engine = WorkflowDurableEngine(
+            workflow: Workflow(),
+            checkpointing: WorkflowCheckpointing.inMemory(),
+            checkpointID: "testing",
+            policy: .onCompletion,
+            resume: false
+        )
+        return try engine.extractResult(from: output)
+    }
+}
+#endif

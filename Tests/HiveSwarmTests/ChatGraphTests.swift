@@ -1,4 +1,6 @@
-import CryptoKit
+// P2-1 grandfather: split pending; new files are gated at 1000 lines.
+// swiftlint:disable file_length
+#if SWARM_INTEGRATIONS
 import Foundation
 import HiveCore
 @_spi(ColonyInternal) @testable import Swarm
@@ -32,6 +34,24 @@ struct HiveAgentsTests {
             if case .none = message.op { return true }
             return false
         })
+    }
+
+    @Test("Messages reducer preserves reasoning content")
+    func messagesReducer_preservesReasoningContent() throws {
+        let update = [
+            HiveChatMessage(
+                id: "reasoning-message",
+                role: .assistant,
+                content: "Final answer",
+                reasoningContent: "Private chain summary"
+            )
+        ]
+
+        let reduced = try ChatGraph.MessagesReducer.reduce(current: [], update: update)
+
+        #expect(reduced.count == 1)
+        #expect(reduced[0].content == "Final answer")
+        #expect(reduced[0].reasoningContent == "Private chain summary")
     }
 
     @Test("Compaction: llmInputMessages derived, messages preserved (runtime-driven)")
@@ -1010,6 +1030,46 @@ struct HiveAgentsTests {
         #expect(result.toolResults.first?.callId == result.toolCalls.first?.id)
     }
 
+    @Test("GraphAgent maps provider tool-call IDs deterministically")
+    func hiveBackedAgent_mapsToolCallIDsDeterministically() async throws {
+        func makeAgent(threadID: String) throws -> GraphAgent {
+            let graph = try ChatGraph.makeToolUsingChatAgent()
+            let context = RuntimeContext(modelName: "test-model", toolApprovalPolicy: .never)
+            let environment = HiveEnvironment<ChatGraph.Schema>(
+                context: context,
+                clock: NoopClock(),
+                logger: NoopLogger(),
+                model: AnyHiveModelClient(ScriptedModelClient(script: ModelScript(chunksByInvocation: [
+                    [.final(HiveChatResponse(message: message(
+                        id: "m1",
+                        role: .assistant,
+                        content: "",
+                        toolCalls: [HiveToolCall(id: "stable-provider-call", name: "calc", argumentsJSON: "{}")]
+                    )))],
+                    [.final(HiveChatResponse(message: message(id: "m2", role: .assistant, content: "done")))]
+                ]))),
+                modelRouter: nil,
+                tools: AnyHiveToolRegistry(StubToolRegistry(resultContent: "42")),
+                checkpointStore: nil
+            )
+
+            let runtime = try HiveRuntime(graph: graph, environment: environment)
+            let hiveRuntime = GraphRuntimeAdapter(runControl: GraphRunController(runtime: runtime))
+            return GraphAgent(
+                runtime: hiveRuntime,
+                name: "deterministic-bridge",
+                threadID: HiveThreadID(threadID)
+            )
+        }
+
+        let first = try await makeAgent(threadID: "deterministic-1").run("hello")
+        let second = try await makeAgent(threadID: "deterministic-2").run("hello")
+
+        #expect(first.toolCalls.first?.providerCallId == "stable-provider-call")
+        #expect(second.toolCalls.first?.providerCallId == "stable-provider-call")
+        #expect(first.toolCalls.first?.id == second.toolCalls.first?.id)
+    }
+
     @Test("Deterministic message IDs: model taskID drives assistant message id")
     func deterministicMessageID_fromModelTaskID() async throws {
         let graph = try ChatGraph.makeToolUsingChatAgent()
@@ -1610,9 +1670,7 @@ private func expectedRoleBasedMessageID(taskID: String, role: String) -> String 
     data.append(0x00)
     data.append(contentsOf: Array(role.utf8))
     data.append(contentsOf: [UInt8(0), UInt8(0), UInt8(0), UInt8(0)])
-    let digest = SHA256.hash(data: data)
-    let hex = digest.map { String(format: "%02x", $0) }.joined()
-    return "msg:" + hex
+    return "msg:" + SwarmSHA256.hex(data)
 }
 
 // MARK: - TestFailure
@@ -1648,3 +1706,4 @@ private struct CancellableTestTool: AnyJSONTool {
         throw CancellationError()
     }
 }
+#endif

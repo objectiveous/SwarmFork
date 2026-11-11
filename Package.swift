@@ -3,10 +3,24 @@ import PackageDescription
 import CompilerPluginSupport
 import Foundation
 let includeDemo = ProcessInfo.processInfo.environment["SWARM_INCLUDE_DEMO"] == "1"
+let coreOnly = ProcessInfo.processInfo.environment["SWARM_CORE_ONLY"] == "1"
+// Root-package lean CI/dev helper: omit in-tree integration *targets* so bare
+// `swift build` / `swift test` do not compile HiveCore/Membrane/ContextCore
+// orphans (SPM root builds every target). Consumers never set this — they get
+// the full Package.swift with trait-gated edges (lean resolve, no MetalANNS).
+let omitIntegrationTargets =
+    ProcessInfo.processInfo.environment["SWARM_OMIT_INTEGRATION_TARGETS"] == "1"
+let enableIntegrationModules = !coreOnly && !omitIntegrationTargets
+#if os(Linux)
+let registerAppleIntegrationTargets = false
+#else
+let registerAppleIntegrationTargets = true
+#endif
 
 var packageProducts: [Product] = [
     .library(name: "Swarm", targets: ["Swarm"]),
     .library(name: "SwarmOpenTelemetry", targets: ["SwarmOpenTelemetry"]),
+    // Deprecated hollow re-export; remove the product in 0.7.0.
     .library(name: "SwarmMembrane", targets: ["SwarmMembrane"]),
     .library(name: "SwarmMCP", targets: ["SwarmMCP"]),
 ]
@@ -17,7 +31,7 @@ if includeDemo {
 }
 
 var packageDependencies: [Package.Dependency] = [
-    // swift-syntax range is intentionally widened to include 601/602 lines.
+    // Floor swift-syntax at 601 so SPM cannot resolve 600.x (especially 600.0.1).
     //
     // Background: Xcode 26 (Swift 6.2.x) ships implicit SwiftPM prebuilts for
     // swift-syntax via the swiftlang "MacroSupport" prebuilt server. The 600.0.1
@@ -26,55 +40,100 @@ var packageDependencies: [Package.Dependency] = [
     // "Unable to find module dependency: 'SwiftSyntax'" errors. That prebuilt
     // download cannot be disabled from a consumer project (SWIFT_USE_PREBUILT_MACROS=NO,
     // IDESwiftPackageEnablePrebuilts=NO, SWIFTPM_DISABLE_PREBUILTS=1 and
-    // -skipMacroValidation all fail to suppress it). Widening the range here lets
-    // SwiftPM resolve to 601+ on Swift 6.2 toolchains, which does not ship the
-    // broken prebuilt.
-    .package(url: "https://github.com/swiftlang/swift-syntax.git", "600.0.0"..<"603.0.0"),
-    .package(url: "https://github.com/apple/swift-log.git", from: "1.10.1"),
-    .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.11.0"),
-    .package(url: "https://github.com/open-telemetry/opentelemetry-swift-core.git", from: "2.3.0"),
-    .package(url: "https://github.com/scinfu/SwiftSoup.git", from: "2.13.2"),
-    // Cohort dependencies resolve by sibling path inside OneWorkspace so the
-    // objectiveous forks are the single source of truth and SwiftPM does not
-    // mix upstream URL pins with local fork pins.
-    .package(
-        path: "../Wax",
-        traits: [
-            .trait(name: "MiniLMEmbeddings"),
-            .trait(name: "ArcticEmbeddings"),
-        ]
-    ),
-    .package(
-        path: "../Conduit",
-        traits: [
-            .trait(name: "OpenAI"),
-            .trait(name: "OpenRouter"),
-            .trait(name: "Anthropic"),
-            .trait(name: "MLX"),
-        ]
-    ),
-    .package(url: "https://github.com/christopherkarani/ContextCore.git", exact: "1.0.0"),
-    .package(path: "../Membrane"),
-    .package(url: "https://github.com/christopherkarani/Hive", exact: "0.2.0"),
+    // -skipMacroValidation all fail to suppress it). Floor ≥ 601 keeps resolution
+    // on toolchains/prebuilts that work with Swift 6.2 / Xcode 26.
+    // Only SwarmMacros (+ SwiftSyntaxMacrosTestSupport in tests) depends on
+    // swift-syntax. Upper bound stays <603 for package-graph stability.
+    // Product edges are Macros-trait-gated so consumers can drop the pin.
+    .package(url: "https://github.com/swiftlang/swift-syntax.git", "601.0.0"..<"603.0.0"),
+    .package(path: "../SwiftSupport/swift-log"),
+    // MCP and OpenTelemetry are declared for the companion products, but only
+    // *used* through trait-gated product edges. With those traits off, SPM
+    // does not pin the SDK, OTel, or the MCP SDK's NIO/EventSource tree.
+    .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.12.1"),
+    .package(url: "https://github.com/open-telemetry/opentelemetry-swift-core.git", from: "2.4.1"),
 ]
 
+// Integrations trait: opt-in graph/memory/web/Hive paths (off by default).
+// HiveCore, Membrane*, and ContextCore* are native in-tree Sources/ targets.
+// Product edges into those modules (and their remote deps) are trait-gated so
+// lean resolve/build does not pull MetalANNS/Wax/crypto/mutex/collections.
+//
+// ContextCore / Membrane ship a portable stack that builds on Linux (CPU
+// engines, brute-force vector index, hash embeddings, passthrough/in-memory
+// Membrane backends) and accelerate on Apple platforms (Metal/CoreML/
+// Accelerate, MetalANNS). The MetalANNS package and framework links stay
+// platform-gated; the targets themselves register and link on all platforms.
+let macrosTrait = "Macros"
+let mcpTrait = "MCP"
+let otelTrait = "OpenTelemetry"
+let integrationTrait = "Integrations"
+let appleIntegrationPlatforms: [Platform] = [.macOS, .iOS, .tvOS, .visionOS]
+if enableIntegrationModules {
+    packageDependencies += [
+        // Declared when integration modules are registered. All are only *used*
+        // through trait-gated product/target edges (Swarm → Hive/Membrane/
+        // ContextCore/Wax/SwiftSoup, and in-tree modules → crypto/mutex/
+        // collections/MetalANNS). With Integrations off, SPM does not pin them.
+        // SWARM_CORE_ONLY=1 or SWARM_OMIT_INTEGRATION_TARGETS=1 drops this block.
+        .package(url: "https://github.com/scinfu/SwiftSoup.git", from: "2.13.5"),
+        // OneWorkspace uses one sibling Wax fork throughout the runtime graph.
+        // Its embedding initializer and nonthrowing FrameStore reads/close are
+        // adapted in the Wax integration rather than duplicating Wax modules.
+        .package(path: "../Wax"),
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "3.7.0"),
+        .package(url: "https://github.com/swhitty/swift-mutex.git", from: "0.0.6"),
+        .package(path: "../SwiftSupport/swift-collections"),
+    ]
+    if registerAppleIntegrationTargets {
+        packageDependencies.append(
+            .package(path: "../MetalANNS")
+        )
+    }
+}
+
 var swarmDependencies: [Target.Dependency] = [
-    "SwarmMacros",
+    .target(name: "SwarmMacros", condition: .when(traits: [macrosTrait])),
     .product(name: "Logging", package: "swift-log"),
-    .product(name: "SwiftSoup", package: "SwiftSoup"),
-    .product(name: "Wax", package: "Wax"),
-    .product(name: "Conduit", package: "Conduit"),
-    .product(name: "ConduitAdvanced", package: "Conduit"),
-    .product(name: "ContextCore", package: "ContextCore"),
-    .product(name: "HiveCore", package: "Hive"),
-    .product(name: "Membrane", package: "Membrane"),
-    .product(name: "MembraneCore", package: "Membrane"),
-    .product(name: "MembraneHive", package: "Membrane")
 ]
 
 var swarmSwiftSettings: [SwiftSetting] = [
     .enableExperimentalFeature("StrictConcurrency"),
-    .define("SWARM_HIVE", .when(traits: ["hive"])),
+]
+
+if enableIntegrationModules {
+    swarmDependencies += [
+        // HTML parsing for web helpers; only linked when Integrations is enabled.
+        .product(name: "SwiftSoup", package: "SwiftSoup", condition: .when(traits: [integrationTrait])),
+        // Portable Integrations modules (all platforms when trait is on).
+        // Membrane/ContextCore use their portable backends on Linux and
+        // accelerate with Metal/CoreML/MetalANNS where available.
+        .target(name: "HiveCore", condition: .when(traits: [integrationTrait])),
+        .target(name: "MembraneCore", condition: .when(traits: [integrationTrait])),
+        .target(name: "Membrane", condition: .when(traits: [integrationTrait])),
+        .target(name: "MembraneContextCore", condition: .when(traits: [integrationTrait])),
+        .target(name: "ContextCore", condition: .when(traits: [integrationTrait])),
+        // Wax remains an external package + trait-gated product dependency.
+        .product(name: "Wax", package: "Wax", condition: .when(traits: [integrationTrait])),
+    ]
+    swarmSwiftSettings.append(.define("SWARM_INTEGRATIONS", .when(traits: [integrationTrait])))
+}
+
+swarmSwiftSettings.append(.define("SWARM_MACROS", .when(traits: [macrosTrait])))
+swarmSwiftSettings.append(.define("SWARM_MCP", .when(traits: [mcpTrait])))
+swarmSwiftSettings.append(.define("SWARM_OTEL", .when(traits: [otelTrait])))
+
+let swarmCoreOnlyExcludes = [
+    "Integration/Wax",
+    "Integration/Membrane/SessionMembraneAgentAdapter.swift",
+    "Integration/Membrane/WaxMembraneStorage.swift",
+    "Internal/GraphRuntime",
+    "Memory/ContextCoreMemory.swift",
+    "Memory/DefaultAgentMemory.swift",
+    "Tools/Web",
+    "Workflow/WorkflowCheckpointCodec.swift",
+    "Workflow/WorkflowCheckpointStore.swift",
+    "Workflow/WorkflowDurableEngine.swift",
 ]
 
 var packageTargets: [Target] = [
@@ -82,10 +141,28 @@ var packageTargets: [Target] = [
     .macro(
         name: "SwarmMacros",
         dependencies: [
-            .product(name: "SwiftSyntax", package: "swift-syntax"),
-            .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
-            .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
-            .product(name: "SwiftSyntaxBuilder", package: "swift-syntax")
+            .product(name: "SwiftSyntax", package: "swift-syntax", condition: .when(traits: [macrosTrait])),
+            .product(
+                name: "SwiftSyntaxMacros",
+                package: "swift-syntax",
+                condition: .when(traits: [macrosTrait])
+            ),
+            .product(
+                name: "SwiftCompilerPlugin",
+                package: "swift-syntax",
+                condition: .when(traits: [macrosTrait])
+            ),
+            .product(
+                name: "SwiftSyntaxBuilder",
+                package: "swift-syntax",
+                condition: .when(traits: [macrosTrait])
+            ),
+            .product(
+                name: "SwiftDiagnostics",
+                package: "swift-syntax",
+                condition: .when(traits: [macrosTrait])
+            ),
+            .product(name: "SwiftParser", package: "swift-syntax", condition: .when(traits: [macrosTrait])),
         ],
         swiftSettings: [
             .enableExperimentalFeature("StrictConcurrency")
@@ -96,13 +173,23 @@ var packageTargets: [Target] = [
     .target(
         name: "Swarm",
         dependencies: swarmDependencies,
+        exclude: enableIntegrationModules ? [] : swarmCoreOnlyExcludes,
         swiftSettings: swarmSwiftSettings
     ),
     .target(
         name: "SwarmOpenTelemetry",
         dependencies: [
             "Swarm",
-            .product(name: "OpenTelemetryApi", package: "opentelemetry-swift-core"),
+            .product(
+                name: "OpenTelemetryApi",
+                package: "opentelemetry-swift-core",
+                condition: .when(traits: [otelTrait])
+            ),
+            .product(
+                name: "OpenTelemetrySdk",
+                package: "opentelemetry-swift-core",
+                condition: .when(traits: [otelTrait])
+            ),
         ],
         swiftSettings: swarmSwiftSettings
     ),
@@ -118,7 +205,7 @@ var packageTargets: [Target] = [
         name: "SwarmMCP",
         dependencies: [
             "Swarm",
-            .product(name: "MCP", package: "swift-sdk"),
+            .product(name: "MCP", package: "swift-sdk", condition: .when(traits: [mcpTrait])),
         ],
         swiftSettings: swarmSwiftSettings
     ),
@@ -126,7 +213,6 @@ var packageTargets: [Target] = [
         name: "SwarmCapabilityShowcaseSupport",
         dependencies: [
             "Swarm",
-            "SwarmMCP",
         ],
         swiftSettings: swarmSwiftSettings
     ),
@@ -144,36 +230,41 @@ var packageTargets: [Target] = [
     .testTarget(
         name: "SwarmTests",
         dependencies: {
-            let dependencies: [Target.Dependency] = [
+            var dependencies: [Target.Dependency] = [
                 "Swarm",
                 "SwarmMCP",
-                .product(name: "Conduit", package: "Conduit"),
-                .product(name: "ConduitAdvanced", package: "Conduit"),
-                .product(name: "Membrane", package: "Membrane"),
-                .product(name: "MembraneCore", package: "Membrane"),
+                .product(name: "MCP", package: "swift-sdk", condition: .when(traits: [mcpTrait])),
             ]
+            if enableIntegrationModules {
+                dependencies += [
+                    .target(name: "MembraneCore", condition: .when(traits: [integrationTrait])),
+                    .target(name: "ContextCoreTypes", condition: .when(traits: [integrationTrait])),
+                    .target(name: "Membrane", condition: .when(traits: [integrationTrait])),
+                    .target(name: "ContextCore", condition: .when(traits: [integrationTrait])),
+                    // swift-crypto for tests that hash (Linux has no CryptoKit).
+                    .product(
+                        name: "Crypto",
+                        package: "swift-crypto",
+                        condition: .when(traits: [integrationTrait])
+                    ),
+                ]
+            }
             return dependencies
         }(),
-        resources: [
-            .copy("Guardrails/INTEGRATION_TEST_SUMMARY.md"),
-            .copy("Guardrails/QUICK_REFERENCE.md")
-        ],
-        swiftSettings: swarmSwiftSettings
-    ),
-    .testTarget(
-        name: "HiveSwarmTests",
-        dependencies: [
-            "Swarm",
-            .product(name: "HiveCore", package: "Hive")
-        ],
+        exclude: ["MCP/Fixtures"],
+        resources: [],
         swiftSettings: swarmSwiftSettings
     ),
     .testTarget(
         name: "SwarmMacrosTests",
         dependencies: [
             "Swarm",
-            "SwarmMacros",
-            .product(name: "SwiftSyntaxMacrosTestSupport", package: "swift-syntax")
+            .target(name: "SwarmMacros", condition: .when(traits: [macrosTrait])),
+            .product(
+                name: "SwiftSyntaxMacrosTestSupport",
+                package: "swift-syntax",
+                condition: .when(traits: [macrosTrait])
+            ),
         ],
         swiftSettings: [
             .enableExperimentalFeature("StrictConcurrency")
@@ -184,20 +275,188 @@ var packageTargets: [Target] = [
         dependencies: [
             "SwarmCapabilityShowcaseSupport",
         ],
-        swiftSettings: [
-            .enableExperimentalFeature("StrictConcurrency")
-        ]
+        // Inherit SWARM_INTEGRATIONS so requiredFamilies/durable match the support target.
+        swiftSettings: swarmSwiftSettings
     ),
     .testTarget(
         name: "SwarmOpenTelemetryTests",
         dependencies: [
             "Swarm",
             "SwarmOpenTelemetry",
-            .product(name: "OpenTelemetrySdk", package: "opentelemetry-swift-core"),
+            .product(
+                name: "OpenTelemetryApi",
+                package: "opentelemetry-swift-core",
+                condition: .when(traits: [otelTrait])
+            ),
+            .product(
+                name: "OpenTelemetrySdk",
+                package: "opentelemetry-swift-core",
+                condition: .when(traits: [otelTrait])
+            ),
         ],
         swiftSettings: swarmSwiftSettings
     )
 ]
+
+if enableIntegrationModules {
+    // MARK: - In-tree Integrations modules (internal targets only — no library products)
+    // HiveCore, Membrane*, ContextCore* live under Sources/ and are linked into Swarm
+    // only when the Integrations trait is enabled.
+
+    let integrationsTargetSwiftSettings: [SwiftSetting] = [
+        .enableExperimentalFeature("StrictConcurrency"),
+        .swiftLanguageMode(.v6),
+    ]
+
+    // Trait-gate remote product deps on in-tree modules. Unconditional product
+    // edges made SPM pin MetalANNS/crypto/mutex/collections even when
+    // Integrations was off (targets registered but unused). With trait gates,
+    // lean resolve only pins always-on remotes (swift-syntax via Macros, swift-log).
+    //
+    // Note: SPM root packages still *compile* every registered target on bare
+    // `swift build`/`swift test`. Use product-scoped builds, or
+    // SWARM_OMIT_INTEGRATION_TARGETS=1 for root-package lean CI (see
+    // scripts/ci/lean-build-test.sh). Consumers only build reachable targets.
+    let integrationsRemoteDepsActive = TargetDependencyCondition.when(traits: [integrationTrait])
+    let integrationsAppleRemoteDepsActive = TargetDependencyCondition.when(
+        platforms: appleIntegrationPlatforms,
+        traits: [integrationTrait]
+    )
+
+    // MetalANNS is only a declared package on Apple (see packageDependencies):
+    // naming it in a target edge on Linux fails manifest evaluation even when
+    // the edge condition can never match, so build the ContextCore dependency
+    // list with the product edge Apple-only at the manifest level.
+    var contextCoreDependencies: [Target.Dependency] = [
+        "ContextCoreEngine",
+        "ContextCoreTypes",
+        .product(name: "Logging", package: "swift-log"),
+    ]
+    if registerAppleIntegrationTargets {
+        contextCoreDependencies.append(
+            .product(
+                name: "MetalANNS",
+                package: "MetalANNS",
+                condition: integrationsAppleRemoteDepsActive
+            )
+        )
+    }
+
+    packageTargets += [
+        // HiveCore — durable graph / checkpoint runtime
+        .target(
+            name: "HiveCore",
+            dependencies: [
+                .product(name: "Crypto", package: "swift-crypto", condition: integrationsRemoteDepsActive),
+                .product(name: "Mutex", package: "swift-mutex", condition: integrationsRemoteDepsActive),
+            ],
+            path: "Sources/HiveCore",
+            exclude: ["README.md"],
+            swiftSettings: integrationsTargetSwiftSettings
+        ),
+
+        // Membrane stack
+        .target(
+            name: "MembraneCore",
+            dependencies: [
+                .product(
+                    name: "Collections",
+                    package: "swift-collections",
+                    condition: integrationsRemoteDepsActive
+                ),
+            ],
+            path: "Sources/MembraneCore",
+            swiftSettings: integrationsTargetSwiftSettings
+        ),
+
+        // Portable ContextCore value types, vector-index and embedding
+        // contracts. Zero dependencies, so it builds on Linux as the home of
+        // the portable backends (brute-force index, hash embeddings).
+        .target(
+            name: "ContextCoreTypes",
+            path: "Sources/ContextCoreTypes",
+            swiftSettings: integrationsTargetSwiftSettings
+        ),
+
+        // Membrane session façade. Portable: pointer IDs hash with CryptoKit
+        // where available and swift-crypto elsewhere (Linux).
+        .target(
+            name: "Membrane",
+            dependencies: [
+                "MembraneCore",
+                .product(
+                    name: "Crypto",
+                    package: "swift-crypto",
+                    condition: integrationsRemoteDepsActive
+                ),
+            ],
+            path: "Sources/Membrane",
+            swiftSettings: integrationsTargetSwiftSettings
+        ),
+        .target(
+            name: "MembraneContextCore",
+            dependencies: [
+                "MembraneCore",
+                "ContextCore",
+            ],
+            path: "Sources/MembraneContextCore",
+            swiftSettings: integrationsTargetSwiftSettings
+        ),
+        .target(
+            name: "ContextCoreShaders",
+            path: "Sources/ContextCoreShaders",
+            resources: [.copy("Shaders")],
+            swiftSettings: integrationsTargetSwiftSettings,
+            linkerSettings: [
+                .linkedFramework("Metal", .when(platforms: appleIntegrationPlatforms)),
+            ]
+        ),
+
+        // ContextCore engine + façade. Portable on Linux via the CPU engines,
+        // brute-force index, and hash embeddings; Metal/CoreML/Accelerate and
+        // MetalANNS light up only where present (Apple, Integrations on).
+        .target(
+            name: "ContextCoreEngine",
+            dependencies: [
+                "ContextCoreShaders",
+                "ContextCoreTypes",
+                .product(
+                    name: "Crypto",
+                    package: "swift-crypto",
+                    condition: integrationsRemoteDepsActive
+                ),
+            ],
+            path: "Sources/ContextCoreEngine",
+            swiftSettings: integrationsTargetSwiftSettings,
+            linkerSettings: [
+                .linkedFramework("Metal", .when(platforms: appleIntegrationPlatforms)),
+                .linkedFramework("CoreML", .when(platforms: appleIntegrationPlatforms)),
+                .linkedFramework("Accelerate", .when(platforms: appleIntegrationPlatforms)),
+            ]
+        ),
+        .target(
+            name: "ContextCore",
+            dependencies: contextCoreDependencies,
+            path: "Sources/ContextCore",
+            resources: [.process("Resources")],
+            swiftSettings: integrationsTargetSwiftSettings,
+            linkerSettings: [
+                .linkedFramework("Metal", .when(platforms: appleIntegrationPlatforms)),
+                .linkedFramework("CoreML", .when(platforms: appleIntegrationPlatforms)),
+                .linkedFramework("Accelerate", .when(platforms: appleIntegrationPlatforms)),
+            ]
+        ),
+
+        .testTarget(
+            name: "HiveSwarmTests",
+            dependencies: [
+                "Swarm",
+                .target(name: "HiveCore", condition: .when(traits: [integrationTrait])),
+            ],
+            swiftSettings: swarmSwiftSettings
+        ),
+    ]
+}
 
 if includeDemo {
     packageTargets.append(
@@ -218,7 +477,8 @@ if includeDemo {
                 "SwarmMCP",
             ],
             swiftSettings: [
-                .enableExperimentalFeature("StrictConcurrency")
+                .enableExperimentalFeature("StrictConcurrency"),
+                .define("SWARM_MCP", .when(traits: [mcpTrait])),
             ]
         )
     )
@@ -233,9 +493,48 @@ let package = Package(
     ],
     products: packageProducts,
     traits: [
+        // Macros on by default (SE-0450). Consumers disable with `traits: []` to
+        // drop swift-syntax; FunctionTool is the macro-free tool path.
+        // Opt-in traits enable Macros so `traits: ["MCP"]` / `["OpenTelemetry"]`
+        // / `["Integrations"]` keep @Tool (specifying traits replaces defaults).
+        .default(enabledTraits: [macrosTrait]),
         .trait(
-            name: "hive",
-            description: "Enable Hive-backed workflow and runtime integration features."
+            name: macrosTrait,
+            description: """
+            Enable Swarm compiler macros (@Tool, @Parameter, #Prompt, @Traceable, \
+            and related plugins). On by default. Disable to drop the swift-syntax \
+            dependency; use FunctionTool for the macro-free tool path.
+            """
+        ),
+        .trait(
+            name: mcpTrait,
+            description: """
+            Enable the SwarmMCP product: MCP Swift SDK server adapter \
+            (`SwarmMCPServerService`). Off by default. Does not affect Swarm's \
+            built-in MCP client. Enabling MCP also enables Macros.
+            """,
+            enabledTraits: [macrosTrait]
+        ),
+        .trait(
+            name: otelTrait,
+            description: """
+            Enable the SwarmOpenTelemetry product: OpenTelemetry tracing wrappers \
+            and OTLP/HTTP export. Off by default. Enabling OpenTelemetry also \
+            enables Macros.
+            """,
+            enabledTraits: [macrosTrait]
+        ),
+        .trait(
+            name: integrationTrait,
+            description: """
+            Enable SWARM_INTEGRATIONS: durable Hive workflows, ContextCore+Wax default memory, \
+            Membrane adapters, and web helpers. Off by default. HiveCore, Membrane, and \
+            ContextCore are native in-tree Sources/ targets (internal; not separate products). \
+            The memory/Membrane stack is portable (CPU engines, brute-force index, hash \
+            embeddings on Linux) and accelerates with Metal/CoreML/MetalANNS on Apple. \
+            Wax remains an external package for now. Enabling Integrations also enables Macros.
+            """,
+            enabledTraits: [macrosTrait]
         ),
     ],
     dependencies: packageDependencies,

@@ -7,8 +7,9 @@ import Foundation
 @testable import Swarm
 import Testing
 
-@Suite("Streaming Event Tests")
+@Suite("Streaming Event Tests", .ephemeralDefaultStores)
 struct StreamingEventTests {
+
     
     @Test("Agent stream emits tool call events")
     func reactAgentStreamEvents() async throws {
@@ -140,5 +141,160 @@ struct StreamingEventTests {
         #expect(toolCallCount == 1)
         #expect(streamCount == 0)
         #expect(generateCount == 0)
+    }
+
+    @Test("Agent streaming honors providers that opt out of streaming tool calls")
+    func agentStreamingHonorsToolCallStreamingCapabilityOptOut() async throws {
+        let provider = CapabilityOptOutToolStreamingProvider()
+        let tool = MockTool(name: "test_tool", description: "Test tool")
+        let agent = try Agent(
+            tools: [tool],
+            instructions: "You are a test assistant.",
+            inferenceProvider: provider
+        )
+
+        for try await _ in agent.stream("Start") {}
+
+        #expect(provider.generateWithToolCallsCount == 1)
+        #expect(provider.streamWithToolCallsCount == 0)
+    }
+
+    @Test("Agent streaming uses providers that advertise streaming tool calls")
+    func agentStreamingUsesAdvertisedToolCallStreamingCapability() async throws {
+        let provider = CapabilityOptInToolStreamingProvider()
+        let tool = MockTool(name: "test_tool", description: "Test tool")
+        let agent = try Agent(
+            tools: [tool],
+            instructions: "You are a test assistant.",
+            inferenceProvider: provider
+        )
+
+        var sawOutput = false
+        for try await event in agent.stream("Start") {
+            if case .output(.token("Done")) = event {
+                sawOutput = true
+            }
+        }
+
+        #expect(sawOutput)
+        #expect(provider.generateWithToolCallsCount == 0)
+        #expect(provider.streamWithToolCallsCount == 1)
+    }
+}
+
+private final class CapabilityOptOutToolStreamingProvider:
+    InferenceProvider,
+    CapabilityReportingInferenceProvider,
+    @unchecked Sendable
+{
+    var capabilities: InferenceProviderCapabilities {
+        [.nativeToolCalling]
+    }
+
+    var generateWithToolCallsCount: Int {
+        withLock { generateWithToolCallsCountStorage }
+    }
+
+    var streamWithToolCallsCount: Int {
+        withLock { streamWithToolCallsCountStorage }
+    }
+
+    private let lock = NSLock()
+    private var generateWithToolCallsCountStorage = 0
+    private var streamWithToolCallsCountStorage = 0
+
+    func generate(messages _: [InferenceMessage], options _: InferenceOptions) async throws -> String {
+        "Done"
+    }
+
+    func generateWithToolCalls(
+        messages _: [InferenceMessage],
+        tools _: [ToolSchema],
+        options _: InferenceOptions,
+        toolExecutor _: ToolCallExecutor?
+    ) async throws -> InferenceResponse {
+        withLock {
+            generateWithToolCallsCountStorage += 1
+        }
+        return InferenceResponse(content: "Done", toolCalls: [], finishReason: .completed)
+    }
+
+    func streamWithToolCalls(
+        messages _: [InferenceMessage],
+        tools _: [ToolSchema],
+        options _: InferenceOptions,
+        toolExecutor _: ToolCallExecutor?
+    ) -> AsyncThrowingStream<InferenceStreamUpdate, Error> {
+        withLock {
+            streamWithToolCallsCountStorage += 1
+        }
+        return AsyncThrowingStream { continuation in
+            continuation.finish(throwing: AgentError.generationFailed(reason: "streaming tool calls were not advertised"))
+        }
+    }
+
+    private func withLock<T>(_ operation: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return operation()
+    }
+}
+
+private final class CapabilityOptInToolStreamingProvider:
+    InferenceProvider,
+    CapabilityReportingInferenceProvider,
+    @unchecked Sendable
+{
+    var capabilities: InferenceProviderCapabilities {
+        [.nativeToolCalling, .streamingToolCalls]
+    }
+
+    var generateWithToolCallsCount: Int {
+        withLock { generateWithToolCallsCountStorage }
+    }
+
+    var streamWithToolCallsCount: Int {
+        withLock { streamWithToolCallsCountStorage }
+    }
+
+    private let lock = NSLock()
+    private var generateWithToolCallsCountStorage = 0
+    private var streamWithToolCallsCountStorage = 0
+
+    func generate(messages _: [InferenceMessage], options _: InferenceOptions) async throws -> String {
+        "Done"
+    }
+
+    func generateWithToolCalls(
+        messages _: [InferenceMessage],
+        tools _: [ToolSchema],
+        options _: InferenceOptions,
+        toolExecutor _: ToolCallExecutor?
+    ) async throws -> InferenceResponse {
+        withLock {
+            generateWithToolCallsCountStorage += 1
+        }
+        return InferenceResponse(content: "Done", toolCalls: [], finishReason: .completed)
+    }
+
+    func streamWithToolCalls(
+        messages _: [InferenceMessage],
+        tools _: [ToolSchema],
+        options _: InferenceOptions,
+        toolExecutor _: ToolCallExecutor?
+    ) -> AsyncThrowingStream<InferenceStreamUpdate, Error> {
+        withLock {
+            streamWithToolCallsCountStorage += 1
+        }
+        return AsyncThrowingStream { continuation in
+            continuation.yield(.outputChunk("Done"))
+            continuation.finish()
+        }
+    }
+
+    private func withLock<T>(_ operation: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return operation()
     }
 }

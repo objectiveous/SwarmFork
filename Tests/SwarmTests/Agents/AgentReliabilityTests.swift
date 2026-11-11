@@ -2,8 +2,9 @@ import Foundation
 @testable import Swarm
 import Testing
 
-@Suite("Agent Reliability Tests")
+@Suite("Agent Reliability Tests", .ephemeralDefaultStores)
 struct AgentReliabilityTests {
+
     @Test("Agent.cancel() terminates in-flight run promptly")
     func agentInstanceCancelTerminatesInflightRun() async throws {
         let provider = HangingInferenceProvider(delay: .seconds(2))
@@ -153,7 +154,7 @@ private actor IterationRecordingObserver: AgentObserver {
     }
 }
 
-private actor HangingInferenceProvider: InferenceProvider {
+private actor HangingInferenceProvider: InferenceProvider, MessagesFromPromptInference {
     let delay: Duration
 
     init(delay: Duration) {

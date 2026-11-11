@@ -29,18 +29,18 @@ features:
   - icon: "\U0001F4BE"
     title: Workflows Survive Crashes
     details: Advanced workflows can checkpoint and resume with explicit checkpoint stores and deterministic IDs.
-    link: /reference/overview
+    link: /guide/durable-execution
     linkText: Explore checkpointing
 
   - icon: "\U0001F9E0"
     title: Semantic Memory -- On-Device
-    details: VectorMemory uses Accelerate SIMD for cosine similarity. No cloud API. No network call. Just fast local retrieval.
+    details: VectorMemory performs local similarity search; embedding privacy depends on the provider you configure.
     link: /reference/front-facing-api
     linkText: Memory factories
 
   - icon: "\U0001F50C"
-    title: Any LLM, Same Code
-    details: Foundation Models, Anthropic, OpenAI, Ollama, Gemini, MLX. Swap providers with `inferenceProvider:` at init.
+    title: Foundation Models First
+    details: Built-in Apple Foundation Models. Inject any `InferenceProvider` for custom backends via `inferenceProvider:`.
     link: /reference/front-facing-api
     linkText: Configure providers
 
@@ -54,7 +54,7 @@ features:
 ## Install
 
 ```swift
-.package(url: "https://github.com/christopherkarani/Swarm.git", from: "0.5.1")
+.package(url: "https://github.com/christopherkarani/Swarm.git", from: "0.6.6")
 ```
 
 ## Quick Start
@@ -71,7 +71,7 @@ struct PriceTool {
 let agent = try Agent(
     "Answer finance questions using real data.",
     configuration: .default.name("Analyst"),
-    inferenceProvider: .anthropic(key: "sk-...")
+    inferenceProvider: .foundationModels()
 ) {
     PriceTool()
 }
@@ -95,8 +95,8 @@ let result = try await Workflow()
 | Language | **Swift 6.2** | Python | Python |
 | Data race safety | **Compile-time** | Runtime | Runtime |
 | On-device LLM | **Foundation Models** | -- | -- |
-| Execution engine | **Compiled DAG** | Loop-based | Loop-based |
-| Crash recovery | **Auto checkpoints** | -- | Partial |
+| Execution model | **Typed `Workflow` graph** | Loop-based | Loop-based |
+| Crash recovery | **Explicit checkpoints** | -- | Partial |
 | Type-safe tools | **@Tool macro** | Decorators | Runtime |
 | Streaming | **AsyncThrowingStream** | Callbacks | Callbacks |
 | iOS / macOS | **First-class** | -- | -- |

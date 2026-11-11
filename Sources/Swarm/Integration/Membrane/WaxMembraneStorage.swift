@@ -1,7 +1,16 @@
-import CryptoKit
+#if SWARM_INTEGRATIONS
 import Foundation
 import MembraneCore
 import Wax
+
+protocol WaxPointerIndex: Sendable {
+    func save(_ text: String, metadata: [String: String]) async throws
+    func flush() async throws
+    func search(_ query: String, options: Wax.Memory.SearchOptions) async throws -> Wax.Memory.Results
+    func close() async throws
+}
+
+extension Wax.Memory: WaxPointerIndex {}
 
 actor WaxMembraneStorage: PointerStore, ContextRecallStore {
     private enum MetadataKey {
@@ -10,8 +19,10 @@ actor WaxMembraneStorage: PointerStore, ContextRecallStore {
         static let pointerSHA256 = "membrane.pointer.sha256"
         static let pointerDataType = "membrane.pointer.dataType"
         static let payloadEncoding = "membrane.pointer.payloadEncoding"
+        static let payloadFrameID = "membrane.pointer.payloadFrameID"
         static let summary = "membrane.pointer.summary"
         static let pointerPayloadKind = "pointerPayload"
+        static let pointerPayloadFrameKind = "membrane.pointer.payloadFrame"
     }
 
     private enum StorageFormat {
@@ -19,54 +30,86 @@ actor WaxMembraneStorage: PointerStore, ContextRecallStore {
     }
 
     static var defaultStoreURL: URL {
+        if let ephemeralRoot = SwarmDefaultStoreLocation.installedEphemeralRoot {
+            return makeEphemeralStoreURL(under: ephemeralRoot)
+        }
+        return makeDurableStoreURL()
+    }
+
+    /// Durable store location under the user's Application Support directory,
+    /// independent of any installed ephemeral root.
+    static func makeDurableStoreURL() -> URL {
         let fileManager = FileManager.default
-        let baseURL = SwarmRuntimeEnvironment.isRunningTests
-            ? fileManager.temporaryDirectory
-            : (fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-                ?? fileManager.temporaryDirectory)
+        let baseURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.temporaryDirectory
         let root = baseURL
             .appendingPathComponent("Swarm", isDirectory: true)
-            .appendingPathComponent(SwarmRuntimeEnvironment.isRunningTests ? "MembraneTests" : "Membrane", isDirectory: true)
+            .appendingPathComponent("Membrane", isDirectory: true)
         try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)
-        let fileName = SwarmRuntimeEnvironment.isRunningTests
-            ? "membrane-store-\(UUID().uuidString).mv2s"
-            : "membrane-store.mv2s"
-        return root.appendingPathComponent(fileName)
+        return root.appendingPathComponent("membrane-store.mv2s")
+    }
+
+    /// Throwaway store location with a unique file name for isolated runs
+    /// (tests, previews). Placed under `root`, defaulting to the temporary
+    /// directory.
+    static func makeEphemeralStoreURL(under root: URL? = nil) -> URL {
+        let fileManager = FileManager.default
+        let baseURL = root ?? fileManager.temporaryDirectory
+        let ephemeralRoot = baseURL
+            .appendingPathComponent("Swarm", isDirectory: true)
+            .appendingPathComponent("MembraneTests", isDirectory: true)
+        try? fileManager.createDirectory(at: ephemeralRoot, withIntermediateDirectories: true)
+        return ephemeralRoot.appendingPathComponent("membrane-store-\(UUID().uuidString).mv2s")
     }
 
     private let url: URL
-    private var memory: Wax.Memory?
+    private let memoryFactory: @Sendable (URL) async throws -> any WaxPointerIndex
+    private var memory: (any WaxPointerIndex)?
+    private var memoryTask: Task<any WaxPointerIndex, Error>?
+    private var constructionEpoch = 0
     private var cachedPayloads: [String: Data] = [:]
 
-    init(url: URL = defaultStoreURL) {
+    init(
+        url: URL = defaultStoreURL,
+        memoryFactory: @escaping @Sendable (URL) async throws -> any WaxPointerIndex = { try await Wax.Memory(at: $0) }
+    ) {
         self.url = url
+        self.memoryFactory = memoryFactory
     }
 
     func store(payload: Data, dataType: MemoryPointer.DataType, summary: String) async throws -> MemoryPointer {
         let pointerID = Self.pointerID(for: payload)
-        let encodedPayload = payload.base64EncodedString()
         let sha256 = Self.sha256Hex(payload)
-        let searchableText = Self.searchablePayloadText(payload: payload, summary: summary)
+        let payloadFrameID = try await persistPayloadFrame(
+            payload,
+            pointerID: pointerID,
+            sha256: sha256,
+            dataType: dataType
+        )
         let storedDocument = Self.storedPointerDocument(
             pointerID: pointerID,
-            summary: summary,
-            searchableText: searchableText,
-            encodedPayload: encodedPayload
+            summary: summary
         )
 
         let memory = try await ensureMemory()
-        try await memory.save(
-            storedDocument,
-            metadata: [
-                MetadataKey.kind: MetadataKey.pointerPayloadKind,
-                MetadataKey.pointerID: pointerID,
-                MetadataKey.pointerSHA256: sha256,
-                MetadataKey.pointerDataType: dataType.rawValue,
-                MetadataKey.payloadEncoding: "base64",
-                MetadataKey.summary: summary,
-            ]
-        )
-        try await memory.flush()
+        do {
+            try await memory.save(
+                storedDocument,
+                metadata: [
+                    MetadataKey.kind: MetadataKey.pointerPayloadKind,
+                    MetadataKey.pointerID: pointerID,
+                    MetadataKey.pointerSHA256: sha256,
+                    MetadataKey.pointerDataType: dataType.rawValue,
+                    MetadataKey.payloadEncoding: "frame",
+                    MetadataKey.payloadFrameID: String(payloadFrameID),
+                    MetadataKey.summary: summary,
+                ]
+            )
+            try await memory.flush()
+        } catch {
+            try? await deletePersistedFrame(frameID: payloadFrameID)
+            throw error
+        }
 
         cachedPayloads[pointerID] = payload
         return MemoryPointer(
@@ -80,6 +123,11 @@ actor WaxMembraneStorage: PointerStore, ContextRecallStore {
     func resolve(pointerID: String) async throws -> Data {
         if let cached = cachedPayloads[pointerID] {
             return cached
+        }
+
+        if let payload = try await persistedPayloadFrame(pointerID: pointerID) {
+            cachedPayloads[pointerID] = payload
+            return payload
         }
 
         let memory = try await ensureMemory()
@@ -101,6 +149,7 @@ actor WaxMembraneStorage: PointerStore, ContextRecallStore {
 
     func delete(pointerID: String) async {
         cachedPayloads[pointerID] = nil
+        try? await deletePersistedFrames(pointerID: pointerID)
     }
 
     func recall(query: String, limit: Int) async throws -> [ContextRecallCandidate] {
@@ -123,13 +172,165 @@ actor WaxMembraneStorage: PointerStore, ContextRecallStore {
         }
     }
 
-    private func ensureMemory() async throws -> Wax.Memory {
-        if let memory {
-            return memory
+    private func ensureMemory() async throws -> any WaxPointerIndex {
+        while true {
+            if let memory {
+                return memory
+            }
+            if let task = memoryTask {
+                let epoch = constructionEpoch
+                do {
+                    let resolved = try await task.value
+                    if epoch != constructionEpoch {
+                        // Late-cancel race: a close consumed this task after
+                        // it completed. Retry instead of using the orphan.
+                        continue
+                    }
+                    return resolved
+                } catch is CancellationError {
+                    if epoch != constructionEpoch {
+                        // A concurrent close consumed this construction; retry
+                        // against fresh state instead of surfacing it.
+                        continue
+                    }
+                    throw CancellationError()
+                }
+            } else {
+                // Memoize the in-flight construction: concurrent callers must
+                // join it instead of opening the same store twice (Wax takes
+                // an exclusive file lock per open). Detached so awaiting it
+                // never re-enters this actor.
+                let factory = memoryFactory
+                let storeURL = url
+                constructionEpoch += 1
+                let epoch = constructionEpoch
+                let task = Task.detached { () async throws -> any WaxPointerIndex in
+                    let resolved = try await factory(storeURL)
+                    if Task.isCancelled {
+                        // A concurrent close consumed this construction; close
+                        // the orphan instead of handing waiters a zombie.
+                        try? await resolved.close()
+                        throw CancellationError()
+                    }
+                    return resolved
+                }
+                memoryTask = task
+                do {
+                    let resolved = try await task.value
+                    if epoch == constructionEpoch {
+                        memory = resolved
+                        memoryTask = nil
+                        return resolved
+                    }
+                    // Late-cancel race: consumed after the task's own check.
+                    // Release the orphan and retry.
+                    try? await resolved.close()
+                } catch is CancellationError {
+                    if epoch == constructionEpoch {
+                        memoryTask = nil
+                        throw CancellationError()
+                    }
+                    // Consumed by a concurrent close; retry.
+                } catch {
+                    if epoch == constructionEpoch {
+                        memoryTask = nil
+                    }
+                    throw error
+                }
+            }
         }
-        let resolved = try await Wax.Memory(at: url)
-        memory = resolved
-        return resolved
+    }
+
+    private func closeMemoryIfOpen() async throws {
+        memoryTask?.cancel()
+        memoryTask = nil
+        // Invalidate in-flight waiters: their construction no longer belongs
+        // to this generation, so they must release it and retry.
+        constructionEpoch += 1
+        guard let existing = memory else { return }
+        try await existing.close()
+        memory = nil
+    }
+
+    private func openFrameStore() async throws -> Wax.FrameStore {
+        if FileManager.default.fileExists(atPath: url.path) {
+            return try await Wax.FrameStore.open(at: url)
+        }
+        return try await Wax.FrameStore.create(at: url)
+    }
+
+    private func withFrameStore<Result>(
+        _ body: (Wax.FrameStore) async throws -> Result
+    ) async throws -> Result {
+        let frameStore = try await openFrameStore()
+        do {
+            let result = try await body(frameStore)
+            await frameStore.close()
+            return result
+        } catch {
+            await frameStore.close()
+            throw error
+        }
+    }
+
+    private func persistPayloadFrame(
+        _ payload: Data,
+        pointerID: String,
+        sha256: String,
+        dataType: MemoryPointer.DataType
+    ) async throws -> UInt64 {
+        try await closeMemoryIfOpen()
+        return try await withFrameStore { frameStore in
+            try await frameStore.put(
+                payload,
+                kind: MetadataKey.pointerPayloadFrameKind,
+                metadata: [
+                    MetadataKey.kind: MetadataKey.pointerPayloadFrameKind,
+                    MetadataKey.pointerID: pointerID,
+                    MetadataKey.pointerSHA256: sha256,
+                    MetadataKey.pointerDataType: dataType.rawValue,
+                    MetadataKey.payloadEncoding: "raw",
+                ]
+            )
+        }
+    }
+
+    private func persistedPayloadFrame(pointerID: String) async throws -> Data? {
+        try await closeMemoryIfOpen()
+        return try await withFrameStore { frameStore in
+            let frames = await frameStore.frames()
+            guard let frame = frames.reversed().first(where: {
+                $0.status == .active &&
+                    $0.metadata[MetadataKey.pointerID] == pointerID &&
+                    $0.metadata[MetadataKey.kind] == MetadataKey.pointerPayloadFrameKind
+            }) else {
+                return nil
+            }
+            return try await frameStore.content(frameID: frame.id)
+        }
+    }
+
+    private func deletePersistedFrame(frameID: UInt64) async throws {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return
+        }
+        try await closeMemoryIfOpen()
+        try await withFrameStore { frameStore in
+            try await frameStore.delete(frameID: frameID)
+        }
+    }
+
+    private func deletePersistedFrames(pointerID: String) async throws {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return
+        }
+        try await closeMemoryIfOpen()
+        try await withFrameStore { frameStore in
+            let frames = await frameStore.frames()
+            for frame in frames where frame.status == .active && frame.metadata[MetadataKey.pointerID] == pointerID {
+                try await frameStore.delete(frameID: frame.id)
+            }
+        }
     }
 
     private static func pointerID(for payload: Data) -> String {
@@ -138,28 +339,16 @@ actor WaxMembraneStorage: PointerStore, ContextRecallStore {
     }
 
     private static func sha256Hex(_ payload: Data) -> String {
-        SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
-    }
-
-    private static func searchablePayloadText(payload: Data, summary: String) -> String {
-        guard let decoded = String(data: payload, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            decoded.isEmpty == false else {
-            return summary
-        }
-        return decoded
+        SwarmSHA256.hex(payload)
     }
 
     private static func storedPointerDocument(
         pointerID: String,
-        summary: String,
-        searchableText: String,
-        encodedPayload: String
+        summary: String
     ) -> String {
         """
         pointer_id: \(pointerID)
         summary: \(summary)
-        \(searchableText)\(StorageFormat.payloadMarker)\(encodedPayload)
         """
     }
 
@@ -172,3 +361,4 @@ actor WaxMembraneStorage: PointerStore, ContextRecallStore {
         return Data(base64Encoded: storedText)
     }
 }
+#endif

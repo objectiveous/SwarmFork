@@ -1,10 +1,12 @@
 # Swarm Public API Catalog
 
-Generated from `Sources/Swarm/` on 2026-04-30.
+Generated from `Sources/Swarm/` on 2026-04-30; source-verified and refreshed for high-risk public rows on 2026-07-28 (Conduit hard-removed in 0.6). MCP client rows refreshed 2026-08-14. OpenAI-compatible provider rows added 2026-08-14. Header counts refreshed 2026-08-29.
+
+Refresh the header counts with `scripts/ci/refresh-api-catalog-header.sh`. That command does not regenerate exhaustive rows; update high-risk public rows by hand after source changes.
 
 - Scope: all `.swift` files under `Sources/Swarm/`, excluding `Internal/GraphRuntime/`
-- Source files scanned: 153
-- Public/open symbols cataloged: 2423
+- Source files scanned: 262 (269 including `Internal/GraphRuntime/`)
+- Public/open symbols cataloged: 2434
 
 ## 1. Swarm (entry point)
 
@@ -12,10 +14,10 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
-| 50 | enum | public | Swarm | `public enum Swarm` |
-| 52 | var | public | Swarm.version | `public static let version: String` |
-| 55 | var | public | Swarm.minimumMacOSVersion | `public static let minimumMacOSVersion: String` |
-| 58 | var | public | Swarm.minimumiOSVersion | `public static let minimumiOSVersion: String` |
+| 42 | enum | public | Swarm | `public enum Swarm` |
+| 44 | var | public | Swarm.version | `public static let version: String` |
+| 47 | var | public | Swarm.minimumMacOSVersion | `public static let minimumMacOSVersion: String` |
+| 50 | var | public | Swarm.minimumiOSVersion | `public static let minimumiOSVersion: String` |
 
 ## 2. Core
 
@@ -49,12 +51,15 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 108 | func | public | AgentConfiguration.autoPreviousResponseId(_:) | `public @discardableResult func autoPreviousResponseId(_ value: Bool) -> AgentConfiguration` |
 | 108 | func | public | AgentConfiguration.contextMode(_:) | `public @discardableResult func contextMode(_ value: ContextMode) -> AgentConfiguration` |
 | 108 | func | public | AgentConfiguration.contextProfile(_:) | `public @discardableResult func contextProfile(_ value: ContextProfile) -> AgentConfiguration` |
+| 108 | func | public | AgentConfiguration.autoAttachMetricsCollector(_:) | `public @discardableResult func autoAttachMetricsCollector(_ value: Bool) -> AgentConfiguration` |
 | 108 | func | public | AgentConfiguration.defaultTracingEnabled(_:) | `public @discardableResult func defaultTracingEnabled(_ value: Bool) -> AgentConfiguration` |
 | 108 | func | public | AgentConfiguration.enableStreaming(_:) | `public @discardableResult func enableStreaming(_ value: Bool) -> AgentConfiguration` |
+| 108 | func | public | AgentConfiguration.foundationModelsExecution(_:) | `public @discardableResult func foundationModelsExecution(_ value: FoundationModelsExecutionMode) -> AgentConfiguration` |
 | 108 | func | public | AgentConfiguration.includeReasoning(_:) | `public @discardableResult func includeReasoning(_ value: Bool) -> AgentConfiguration` |
 | 108 | func | public | AgentConfiguration.includeToolCallDetails(_:) | `public @discardableResult func includeToolCallDetails(_ value: Bool) -> AgentConfiguration` |
 | 108 | func | public | AgentConfiguration.inferencePolicy(_:) | `public @discardableResult func inferencePolicy(_ value: InferencePolicy?) -> AgentConfiguration` |
 | 108 | func | public | AgentConfiguration.maxIterations(_:) | `public @discardableResult func maxIterations(_ value: Int) -> AgentConfiguration` |
+| 884 | func | public | AgentConfiguration.maxConsecutiveToolRepeats(_:) | `public @discardableResult func maxConsecutiveToolRepeats(_ value: Int) -> AgentConfiguration` |
 | 108 | func | public | AgentConfiguration.maxTokens(_:) | `public @discardableResult func maxTokens(_ value: Int?) -> AgentConfiguration` |
 | 108 | func | public | AgentConfiguration.modelSettings(_:) | `public @discardableResult func modelSettings(_ value: ModelSettings?) -> AgentConfiguration` |
 | 108 | func | public | AgentConfiguration.name(_:) | `public @discardableResult func name(_ value: String) -> AgentConfiguration` |
@@ -69,6 +74,7 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 113 | var | public | AgentConfiguration.default | `public static let `default`: AgentConfiguration` |
 | 119 | var | public | AgentConfiguration.name | `public var name: String` |
 | 125 | var | public | AgentConfiguration.maxIterations | `public var maxIterations: Int` |
+| 287 | var | public | AgentConfiguration.maxConsecutiveToolRepeats | `public var maxConsecutiveToolRepeats: Int` |
 | 129 | var | public | AgentConfiguration.timeout | `public var timeout: Duration` |
 | 135 | var | public | AgentConfiguration.temperature | `public var temperature: Double` |
 | 139 | var | public | AgentConfiguration.maxTokens | `public var maxTokens: Int?` |
@@ -86,7 +92,14 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 245 | var | public | AgentConfiguration.previousResponseId | `public var previousResponseId: String?` |
 | 253 | var | public | AgentConfiguration.autoPreviousResponseId | `public var autoPreviousResponseId: Bool` |
 | 264 | var | public | AgentConfiguration.defaultTracingEnabled | `public var defaultTracingEnabled: Bool` |
-| 289 | func | public | AgentConfiguration.init(name:maxIterations:timeout:temperature:maxTokens:stopSequences:modelSettings:contextProfile:inferencePolicy:enableStreaming:includeToolCallDetails:stopOnToolError:includeReasoning:sessionHistoryLimit:contextMode:parallelToolCalls:previousResponseId:autoPreviousResponseId:defaultTracingEnabled:) | `public init(name: String = "Agent", maxIterations: Int = 10, timeout: Duration = .seconds(60), temperature: Double = 1.0, maxTokens: Int? = nil, stopSequences: [String] = [], modelSettings: ModelSettings? = nil, contextProfile: ContextProfile = .platformDefault, inferencePolicy: InferencePolicy? = nil, enableStreaming: Bool = true, includeToolCallDetails: Bool = true, stopOnToolError: Bool = false, includeReasoning: Bool = true, sessionHistoryLimit: Int? = 50, contextMode: ContextMode = .adaptive, parallelToolCalls: Bool = false, previousResponseId: String? = nil, autoPreviousResponseId: Bool = false, defaultTracingEnabled: Bool = true)` |
+| 265 | var | public | AgentConfiguration.autoAttachMetricsCollector | `public var autoAttachMetricsCollector: Bool` |
+| 126 | enum | public | FoundationModelsExecutionMode | `public enum FoundationModelsExecutionMode` |
+| 130 | case | public | FoundationModelsExecutionMode.capture | `public case capture` |
+| 139 | case | public | FoundationModelsExecutionMode.nativeSession | `public case nativeSession` |
+| 604 | var | public | AgentConfiguration.foundationModelsExecution | `public var foundationModelsExecution: FoundationModelsExecutionMode` |
+| 608 | var | public | AgentConfiguration.resilience | `public var resilience: ResilienceConfiguration` |
+| 630 | func | public | AgentConfiguration.init(name:maxIterations:maxConsecutiveToolRepeats:timeout:temperature:maxTokens:stopSequences:modelSettings:contextProfile:inferencePolicy:enableStreaming:includeToolCallDetails:stopOnToolError:includeReasoning:sessionHistoryLimit:contextMode:parallelToolCalls:previousResponseId:autoPreviousResponseId:defaultTracingEnabled:autoAttachMetricsCollector:foundationModelsExecution:resilience:) | `public init(name: String = "Agent", maxIterations: Int = 10, maxConsecutiveToolRepeats: Int = 3, timeout: Duration = .seconds(60), temperature: Double = 1.0, maxTokens: Int? = nil, stopSequences: [String] = [], modelSettings: ModelSettings? = nil, contextProfile: ContextProfile = .platformDefault, inferencePolicy: InferencePolicy? = nil, enableStreaming: Bool = true, includeToolCallDetails: Bool = true, stopOnToolError: Bool = false, includeReasoning: Bool = true, sessionHistoryLimit: Int? = 50, contextMode: ContextMode = .adaptive, parallelToolCalls: Bool = false, previousResponseId: String? = nil, autoPreviousResponseId: Bool = false, defaultTracingEnabled: Bool = true, autoAttachMetricsCollector: Bool = false, foundationModelsExecution: FoundationModelsExecutionMode = .capture, resilience: ResilienceConfiguration = .disabled)` |
+| 108 | func | public | AgentConfiguration.resilience(_:) | `public @discardableResult func resilience(_ value: ResilienceConfiguration) -> AgentConfiguration` |
 | 345 | var | public | AgentConfiguration.description | `public var description: String { get }` |
 
 ### Core/AgentEnvironment.swift
@@ -114,6 +127,7 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 29 | case | public | AgentError.invalidLoop(reason:) | `public case invalidLoop(reason: String)` |
 | 34 | case | public | AgentError.toolNotFound(name:) | `public case toolNotFound(name: String)` |
 | 37 | case | public | AgentError.toolExecutionFailed(toolName:underlyingError:) | `public case toolExecutionFailed(toolName: String, underlyingError: String)` |
+| 305 | case | public | AgentError.toolFailure(toolName:message:cause:) | `public case toolFailure(toolName: String, message: String?, cause: (any Error)?)` |
 | 40 | case | public | AgentError.invalidToolArguments(toolName:reason:) | `public case invalidToolArguments(toolName: String, reason: String)` |
 | 45 | case | public | AgentError.inferenceProviderUnavailable(reason:) | `public case inferenceProviderUnavailable(reason: String)` |
 | 48 | case | public | AgentError.contextWindowExceeded(tokenCount:limit:) | `public case contextWindowExceeded(tokenCount: Int, limit: Int)` |
@@ -126,7 +140,14 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 73 | case | public | AgentError.embeddingFailed(reason:) | `public case embeddingFailed(reason: String)` |
 | 78 | case | public | AgentError.agentNotFound(name:) | `public case agentNotFound(name: String)` |
 | 81 | case | public | AgentError.internalError(reason:) | `public case internalError(reason: String)` |
-| 84 | case | public | AgentError.toolCallingRequiresCloudProvider | `public case toolCallingRequiresCloudProvider` |
+| 84 | case | public | AgentError.toolCallingUnsupported | `public case toolCallingUnsupported` |
+| 593 | case | public | AgentError.providerOwnedToolLoopRequiresExecutor | `public case providerOwnedToolLoopRequiresExecutor` |
+| 366 | case | public | AgentError.duplicateHandoffToolName(name:) | `public case duplicateHandoffToolName(name: String)` |
+| 380 | case | public | AgentError.handoffToolNameCollidesWithTool(name:) | `public case handoffToolNameCollidesWithTool(name: String)` |
+| 565 | case | public | AgentError.structuredOutputDecodingFailed(reason:underlying:) | `public case structuredOutputDecodingFailed(reason: String, underlying: (any Error)?)` |
+| 212 | case | public | AgentError.toolCallLoopDetected(toolNames:repetitions:) | `public case toolCallLoopDetected(toolNames: [String], repetitions: Int)` |
+| 464 | case | public | AgentError.authenticationFailed(reason:) | `public case authenticationFailed(reason: String)` |
+| 672 | func | public | AgentError.==(_:_:) | `public static func == (lhs: AgentError, rhs: AgentError) -> Bool` |
 | 90 | var | public | AgentError.errorDescription | `public var errorDescription: String? { get }` |
 | 139 | var | public | AgentError.recoverySuggestion | `public var recoverySuggestion: String? { get }` |
 | 152 | var | public | AgentError.debugDescription | `public var debugDescription: String { get }` |
@@ -154,26 +175,27 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 82 | case | public | AgentEvent.Tool.partial(update:) | `public case partial(update: PartialToolCallUpdate)` |
 | 85 | case | public | AgentEvent.Tool.completed(call:result:) | `public case completed(call: ToolCall, result: ToolResult)` |
 | 88 | case | public | AgentEvent.Tool.failed(call:error:) | `public case failed(call: ToolCall, error: AgentError)` |
-| 92 | enum | public | AgentEvent.Output | `public enum Output` |
-| 94 | case | public | AgentEvent.Output.token(_:) | `public case token(String)` |
-| 97 | case | public | AgentEvent.Output.chunk(_:) | `public case chunk(String)` |
-| 100 | case | public | AgentEvent.Output.thinking(thought:) | `public case thinking(thought: String)` |
-| 103 | case | public | AgentEvent.Output.thinkingPartial(_:) | `public case thinkingPartial(String)` |
-| 107 | enum | public | AgentEvent.Handoff | `public enum Handoff` |
-| 109 | case | public | AgentEvent.Handoff.requested(from:to:reason:) | `public case requested(from: String, to: String, reason: String?)` |
-| 112 | case | public | AgentEvent.Handoff.completed(from:to:) | `public case completed(from: String, to: String)` |
-| 115 | case | public | AgentEvent.Handoff.started(from:to:input:) | `public case started(from: String, to: String, input: String)` |
-| 118 | case | public | AgentEvent.Handoff.completedWithResult(from:to:result:) | `public case completedWithResult(from: String, to: String, result: AgentResult)` |
-| 121 | case | public | AgentEvent.Handoff.skipped(from:to:reason:) | `public case skipped(from: String, to: String, reason: String)` |
-| 125 | enum | public | AgentEvent.Observation | `public enum Observation` |
-| 127 | case | public | AgentEvent.Observation.decision(_:options:) | `public case decision(String, options: [String]?)` |
-| 130 | case | public | AgentEvent.Observation.planUpdated(_:stepCount:) | `public case planUpdated(String, stepCount: Int)` |
-| 133 | case | public | AgentEvent.Observation.guardrailStarted(name:type:) | `public case guardrailStarted(name: String, type: GuardrailType)` |
-| 136 | case | public | AgentEvent.Observation.guardrailPassed(name:type:) | `public case guardrailPassed(name: String, type: GuardrailType)` |
-| 139 | case | public | AgentEvent.Observation.guardrailTriggered(name:type:message:) | `public case guardrailTriggered(name: String, type: GuardrailType, message: String?)` |
-| 142 | case | public | AgentEvent.Observation.memoryAccessed(operation:count:) | `public case memoryAccessed(operation: MemoryOperation, count: Int)` |
-| 145 | case | public | AgentEvent.Observation.llmStarted(model:promptTokens:) | `public case llmStarted(model: String?, promptTokens: Int?)` |
-| 148 | case | public | AgentEvent.Observation.llmCompleted(model:promptTokens:completionTokens:duration:) | `public case llmCompleted(model: String?, promptTokens: Int?, completionTokens: Int?, duration: TimeInterval)` |
+| 94 | func | public | AgentEvent.Tool.completed(_:) | `public static func completed(_ invocation: ToolInvocation) -> Self` |
+| 100 | enum | public | AgentEvent.Output | `public enum Output` |
+| 102 | case | public | AgentEvent.Output.token(_:) | `public case token(String)` |
+| 105 | case | public | AgentEvent.Output.chunk(_:) | `public case chunk(String)` |
+| 108 | case | public | AgentEvent.Output.thinking(thought:) | `public case thinking(thought: String)` |
+| 111 | case | public | AgentEvent.Output.thinkingPartial(_:) | `public case thinkingPartial(String)` |
+| 115 | enum | public | AgentEvent.Handoff | `public enum Handoff` |
+| 117 | case | public | AgentEvent.Handoff.requested(from:to:reason:) | `public case requested(from: String, to: String, reason: String?)` |
+| 120 | case | public | AgentEvent.Handoff.completed(from:to:) | `public case completed(from: String, to: String)` |
+| 123 | case | public | AgentEvent.Handoff.started(from:to:input:) | `public case started(from: String, to: String, input: String)` |
+| 126 | case | public | AgentEvent.Handoff.completedWithResult(from:to:result:) | `public case completedWithResult(from: String, to: String, result: AgentResult)` |
+| 129 | case | public | AgentEvent.Handoff.skipped(from:to:reason:) | `public case skipped(from: String, to: String, reason: String)` |
+| 133 | enum | public | AgentEvent.Observation | `public enum Observation` |
+| 135 | case | public | AgentEvent.Observation.decision(_:options:) | `public case decision(String, options: [String]?)` |
+| 138 | case | public | AgentEvent.Observation.planUpdated(_:stepCount:) | `public case planUpdated(String, stepCount: Int)` |
+| 141 | case | public | AgentEvent.Observation.guardrailStarted(name:type:) | `public case guardrailStarted(name: String, type: GuardrailType)` |
+| 144 | case | public | AgentEvent.Observation.guardrailPassed(name:type:) | `public case guardrailPassed(name: String, type: GuardrailType)` |
+| 147 | case | public | AgentEvent.Observation.guardrailTriggered(name:type:message:) | `public case guardrailTriggered(name: String, type: GuardrailType, message: String?)` |
+| 150 | case | public | AgentEvent.Observation.memoryAccessed(operation:count:) | `public case memoryAccessed(operation: MemoryOperation, count: Int)` |
+| 153 | case | public | AgentEvent.Observation.llmStarted(model:promptTokens:) | `public case llmStarted(model: String?, promptTokens: Int?)` |
+| 156 | case | public | AgentEvent.Observation.llmCompleted(model:promptTokens:completionTokens:duration:) | `public case llmCompleted(model: String?, promptTokens: Int?, completionTokens: Int?, duration: TimeInterval)` |
 | 244 | enum | public | GuardrailType | `public enum GuardrailType` |
 | 245 | case | public | GuardrailType.input | `public case input` |
 | 246 | case | public | GuardrailType.output | `public case output` |
@@ -193,15 +215,20 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 292 | func | public | ToolCall.init(id:providerCallId:toolName:arguments:timestamp:) | `public init(id: UUID = UUID(), providerCallId: String? = nil, toolName: String, arguments: [String : SendableValue] = [:], timestamp: Date = Date())` |
 | 314 | func | public | ToolCall.init(from:) | `public init(from decoder: any Decoder) throws` |
 | 323 | func | public | ToolCall.encode(to:) | `public func encode(to encoder: any Encoder) throws` |
-| 339 | struct | public | ToolResult | `public struct ToolResult` |
-| 341 | var | public | ToolResult.callId | `public let callId: UUID` |
-| 344 | var | public | ToolResult.isSuccess | `public let isSuccess: Bool` |
-| 347 | var | public | ToolResult.output | `public let output: SendableValue` |
-| 350 | var | public | ToolResult.duration | `public let duration: Duration` |
-| 353 | var | public | ToolResult.errorMessage | `public let errorMessage: String?` |
-| 362 | func | public | ToolResult.init(callId:isSuccess:output:duration:errorMessage:) | `public init(callId: UUID, isSuccess: Bool, output: SendableValue, duration: Duration, errorMessage: String? = nil)` |
-| 382 | func | public | ToolResult.success(callId:output:duration:) | `public static func success(callId: UUID, output: SendableValue, duration: Duration) -> ToolResult` |
-| 392 | func | public | ToolResult.failure(callId:error:duration:) | `public static func failure(callId: UUID, error: String, duration: Duration) -> ToolResult` |
+| 268 | struct | public | ToolResult | `public struct ToolResult` |
+| 270 | enum | public | ToolResult.Outcome | `public enum Outcome` |
+| 272 | case | public | ToolResult.Outcome.success(_:) | `public case success(SendableValue)` |
+| 275 | case | public | ToolResult.Outcome.failure(message:) | `public case failure(message: String)` |
+| 278 | var | public | ToolResult.callId | `public let callId: UUID` |
+| 281 | var | public | ToolResult.duration | `public let duration: Duration` |
+| 284 | var | public | ToolResult.outcome | `public let outcome: ToolResult.Outcome` |
+| 287 | var | public | ToolResult.isSuccess | `public var isSuccess: Bool { get }` |
+| 300 | var | public | ToolResult.output | `public var output: SendableValue { get }` |
+| 310 | var | public | ToolResult.errorMessage | `public var errorMessage: String? { get }` |
+| 321 | func | public | ToolResult.init(callId:duration:outcome:) | `public init(callId: UUID, duration: Duration, outcome: ToolResult.Outcome)` |
+| 332 | func | public | ToolResult.init(callId:isSuccess:output:duration:errorMessage:) | `public init(callId: UUID, isSuccess: Bool, output: SendableValue, duration: Duration, errorMessage: String? = nil)` (deprecated) |
+| 355 | func | public | ToolResult.success(callId:output:duration:) | `public static func success(callId: UUID, output: SendableValue, duration: Duration) -> ToolResult` |
+| 365 | func | public | ToolResult.failure(callId:error:duration:) | `public static func failure(callId: UUID, error: String, duration: Duration) -> ToolResult` |
 | 400 | var | public | ToolCall.description | `public var description: String { get }` |
 | 408 | var | public | ToolResult.description | `public var description: String { get }` |
 | 420 | func | public | AgentEvent.==(_:_:) | `public static func == (lhs: AgentEvent, rhs: AgentEvent) -> Bool` |
@@ -215,15 +242,23 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
-| 30 | struct | public | ToolCallRecord | `public struct ToolCallRecord` |
-| 32 | var | public | ToolCallRecord.toolName | `public let toolName: String` |
-| 35 | var | public | ToolCallRecord.arguments | `public let arguments: [String : SendableValue]` |
-| 38 | var | public | ToolCallRecord.result | `public let result: SendableValue` |
-| 41 | var | public | ToolCallRecord.duration | `public let duration: Duration` |
-| 44 | var | public | ToolCallRecord.timestamp | `public let timestamp: Date` |
-| 47 | var | public | ToolCallRecord.isSuccess | `public let isSuccess: Bool` |
-| 50 | var | public | ToolCallRecord.errorMessage | `public let errorMessage: String?` |
-| 62 | func | public | ToolCallRecord.init(toolName:arguments:result:duration:timestamp:isSuccess:errorMessage:) | `public init(toolName: String, arguments: [String : SendableValue] = [:], result: SendableValue = .null, duration: Duration = .zero, timestamp: Date = Date(), isSuccess: Bool = true, errorMessage: String? = nil)` |
+| 35 | struct | public | ToolCallRecord | `public struct ToolCallRecord` |
+| 37 | enum | public | ToolCallRecord.Outcome | `public enum Outcome` |
+| 39 | case | public | ToolCallRecord.Outcome.success(_:) | `public case success(SendableValue)` |
+| 42 | case | public | ToolCallRecord.Outcome.failure(message:) | `public case failure(message: String)` |
+| 44 | var | public | ToolCallRecord.callId | `public let callId: UUID` |
+| 45 | var | public | ToolCallRecord.toolName | `public let toolName: String` |
+| 48 | var | public | ToolCallRecord.arguments | `public let arguments: [String : SendableValue]` |
+| 51 | var | public | ToolCallRecord.duration | `public let duration: Duration` |
+| 54 | var | public | ToolCallRecord.timestamp | `public let timestamp: Date` |
+| 57 | var | public | ToolCallRecord.outcome | `public let outcome: ToolCallRecord.Outcome` |
+| 62 | var | public | ToolCallRecord.result | `public var result: SendableValue { get }` |
+| 72 | var | public | ToolCallRecord.isSuccess | `public var isSuccess: Bool { get }` |
+| 82 | var | public | ToolCallRecord.errorMessage | `public var errorMessage: String? { get }` |
+| 95 | func | public | ToolCallRecord.init(toolName:arguments:duration:timestamp:outcome:) | `public init(toolName: String, arguments: [String : SendableValue] = [:], duration: Duration = .zero, timestamp: Date = Date(), outcome: ToolCallRecord.Outcome)` |
+| 116 | func | public | ToolCallRecord.init(toolName:arguments:result:duration:timestamp:isSuccess:errorMessage:) | `public init(toolName: String, arguments: [String : SendableValue] = [:], result: SendableValue = .null, duration: Duration = .zero, timestamp: Date = Date(), isSuccess: Bool = true, errorMessage: String? = nil)` (deprecated) |
+| 136 | func | public | ToolCallRecord.success(toolName:arguments:result:duration:timestamp:) | `public static func success(toolName: String, arguments: [String : SendableValue] = [:], result: SendableValue, duration: Duration = .zero, timestamp: Date = Date()) -> ToolCallRecord` |
+| 152 | func | public | ToolCallRecord.failure(toolName:arguments:error:duration:timestamp:) | `public static func failure(toolName: String, arguments: [String : SendableValue] = [:], error: String, duration: Duration = .zero, timestamp: Date = Date()) -> ToolCallRecord` |
 | 84 | var | public | ToolCallRecord.description | `public var description: String { get }` |
 | 92 | var | public | ToolCallRecord.debugDescription | `public var debugDescription: String { get }` |
 | 145 | struct | public | AgentResponse | `public struct AgentResponse` |
@@ -245,10 +280,14 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
+| 15 | struct | public | ToolInvocation | `public struct ToolInvocation` |
+| 16 | var | public | ToolInvocation.call | `public let call: ToolCall` |
+| 19 | var | public | ToolInvocation.result | `public let result: ToolResult` |
 | 23 | struct | public | AgentResult | `public struct AgentResult` |
 | 25 | var | public | AgentResult.output | `public let output: String` |
-| 28 | var | public | AgentResult.toolCalls | `public let toolCalls: [ToolCall]` |
-| 31 | var | public | AgentResult.toolResults | `public let toolResults: [ToolResult]` |
+| 28 | var | public | AgentResult.invocations | `public let invocations: [ToolInvocation]` |
+| 31 | var | public | AgentResult.toolCalls | `public var toolCalls: [ToolCall] { get }` |
+| 34 | var | public | AgentResult.toolResults | `public var toolResults: [ToolResult] { get }` |
 | 34 | var | public | AgentResult.iterationCount | `public let iterationCount: Int` |
 | 37 | var | public | AgentResult.duration | `public let duration: Duration` |
 | 40 | var | public | AgentResult.tokenUsage | `public let tokenUsage: TokenUsage?` |
@@ -276,6 +315,7 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 89 | func | public | AgentRuntime.stream(_:session:observer:) | `public nonisolated func stream(_ input: String, session: (any Session)?, observer: (any AgentObserver)?) -> AsyncThrowingStream<AgentEvent, any Error>` |
 | 92 | func | public | AgentRuntime.cancel() | `public func cancel() async` |
 | 108 | func | public | AgentRuntime.runWithResponse(_:session:observer:) | `public func runWithResponse(_ input: String, session: (any Session)?, observer: (any AgentObserver)?) async throws -> AgentResponse` |
+| 129 | func | public | AgentRuntime.handleHandoff(_:context:session:observer:) | `public func handleHandoff(_ request: HandoffRequest, context: AgentContext, session: (any Session)?, observer: (any AgentObserver)?) async throws -> AgentResult` |
 | 119 | var | public | AgentRuntime.name | `public nonisolated var name: String { get }` |
 | 122 | var | public | AgentRuntime.memory | `public nonisolated var memory: (any Memory)? { get }` |
 | 125 | var | public | AgentRuntime.inferenceProvider | `public nonisolated var inferenceProvider: (any InferenceProvider)? { get }` |
@@ -286,16 +326,29 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 144 | func | public | AgentRuntime.run(_:observer:) | `public func run(_ input: String, observer: (any AgentObserver)? = nil) async throws -> AgentResult` |
 | 149 | func | public | AgentRuntime.stream(_:observer:) | `public nonisolated func stream(_ input: String, observer: (any AgentObserver)? = nil) -> AsyncThrowingStream<AgentEvent, any Error>` |
 | 164 | func | public | AgentRuntime.runWithResponse(_:session:observer:) | `public func runWithResponse(_ input: String, session: (any Session)? = nil, observer: (any AgentObserver)? = nil) async throws -> AgentResponse` |
+| 143 | func | public | AgentRuntime.handleHandoff(_:context:session:observer:) | `public func handleHandoff(_ request: HandoffRequest, context: AgentContext, session: (any Session)?, observer: (any AgentObserver)?) async throws -> AgentResult` |
 | 205 | func | public | AgentRuntime.runWithResponse(_:observer:) | `public func runWithResponse(_ input: String, observer: (any AgentObserver)? = nil) async throws -> AgentResponse` |
 | 221 | protocol | public | InferenceProvider | `public protocol InferenceProvider : Sendable` |
-| 228 | func | public | InferenceProvider.generate(prompt:options:) | `public func generate(prompt: String, options: InferenceOptions) async throws -> String` |
-| 235 | func | public | InferenceProvider.stream(prompt:options:) | `public func stream(prompt: String, options: InferenceOptions) -> AsyncThrowingStream<String, any Error>` |
-| 244 | func | public | InferenceProvider.generateWithToolCalls(prompt:tools:options:) | `public func generateWithToolCalls(prompt: String, tools: [ToolSchema], options: InferenceOptions) async throws -> InferenceResponse` |
+| 223 | var | public | InferenceProvider.capabilities | `public var capabilities: InferenceProviderCapabilities { get }` |
+| 229 | var | public | InferenceProvider.promptTokenCounter | `public var promptTokenCounter: (any PromptTokenCounter)? { get }` |
+| 235 | func | public | InferenceProvider.generate(prompt:options:) | `public func generate(prompt: String, options: InferenceOptions) async throws -> String` _(Compatibility only; Agent uses the messages overloads.)_ |
+| 240 | func | public | InferenceProvider.stream(prompt:options:) | `public func stream(prompt: String, options: InferenceOptions) -> AsyncThrowingStream<String, any Error>` _(Compatibility only; Agent uses the messages overloads.)_ |
+| 245 | func | public | InferenceProvider.generateWithToolCalls(prompt:tools:options:) | `public func generateWithToolCalls(prompt: String, tools: [ToolSchema], options: InferenceOptions) async throws -> InferenceResponse` _(Compatibility only; Agent uses the messages overloads.)_ |
+| 257 | func | public | InferenceProvider.streamWithToolCalls(prompt:tools:options:) | `public func streamWithToolCalls(prompt: String, tools: [ToolSchema], options: InferenceOptions) -> AsyncThrowingStream<InferenceStreamUpdate, any Error>` _(Compatibility only; Agent uses the messages overloads.)_ |
+| 267 | func | public | InferenceProvider.generateStructured(prompt:request:options:) | `public func generateStructured(prompt: String, request: StructuredOutputRequest, options: InferenceOptions) async throws -> StructuredOutputResult` _(Compatibility only; Agent uses the messages overloads.)_ |
+| 274 | func | public | InferenceProvider.generate(messages:options:) | `public func generate(messages: [InferenceMessage], options: InferenceOptions) async throws -> String` |
+| 277 | func | public | InferenceProvider.stream(messages:options:) | `public func stream(messages: [InferenceMessage], options: InferenceOptions) -> AsyncThrowingStream<String, any Error>` |
+| 283 | func | public | InferenceProvider.generateWithToolCalls(messages:tools:options:) | `public func generateWithToolCalls(messages: [InferenceMessage], tools: [ToolSchema], options: InferenceOptions) async throws -> InferenceResponse` |
+| 298 | func | public | InferenceProvider.generateWithToolCalls(messages:tools:options:toolExecutor:) | `public func generateWithToolCalls(messages: [InferenceMessage], tools: [ToolSchema], options: InferenceOptions, toolExecutor: ToolCallExecutor?) async throws -> InferenceResponse` |
+| 306 | func | public | InferenceProvider.streamWithToolCalls(messages:tools:options:) | `public func streamWithToolCalls(messages: [InferenceMessage], tools: [ToolSchema], options: InferenceOptions) -> AsyncThrowingStream<InferenceStreamUpdate, any Error>` |
+| 317 | func | public | InferenceProvider.streamWithToolCalls(messages:tools:options:toolExecutor:) | `public func streamWithToolCalls(messages: [InferenceMessage], tools: [ToolSchema], options: InferenceOptions, toolExecutor: ToolCallExecutor?) -> AsyncThrowingStream<InferenceStreamUpdate, any Error>` |
+| 325 | func | public | InferenceProvider.generateStructured(messages:request:options:) | `public func generateStructured(messages: [InferenceMessage], request: StructuredOutputRequest, options: InferenceOptions) async throws -> StructuredOutputResult` |
 | 265 | func | public | InferenceOptions.frequencyPenalty(_:) | `public @discardableResult func frequencyPenalty(_ value: Double?) -> InferenceOptions` |
 | 265 | func | public | InferenceOptions.maxTokens(_:) | `public @discardableResult func maxTokens(_ value: Int?) -> InferenceOptions` |
 | 265 | func | public | InferenceOptions.parallelToolCalls(_:) | `public @discardableResult func parallelToolCalls(_ value: Bool?) -> InferenceOptions` |
 | 265 | func | public | InferenceOptions.presencePenalty(_:) | `public @discardableResult func presencePenalty(_ value: Double?) -> InferenceOptions` |
 | 265 | func | public | InferenceOptions.previousResponseId(_:) | `public @discardableResult func previousResponseId(_ value: String?) -> InferenceOptions` |
+| 265 | func | public | InferenceOptions.conversationId(_:) | `public @discardableResult func conversationId(_ value: String?) -> InferenceOptions` |
 | 265 | func | public | InferenceOptions.providerSettings(_:) | `public @discardableResult func providerSettings(_ value: [String : SendableValue]?) -> InferenceOptions` |
 | 265 | func | public | InferenceOptions.seed(_:) | `public @discardableResult func seed(_ value: Int?) -> InferenceOptions` |
 | 265 | func | public | InferenceOptions.stopSequences(_:) | `public @discardableResult func stopSequences(_ value: [String]) -> InferenceOptions` |
@@ -326,6 +379,7 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 338 | var | public | InferenceOptions.verbosity | `public var verbosity: Verbosity?` |
 | 341 | var | public | InferenceOptions.providerSettings | `public var providerSettings: [String : SendableValue]?` |
 | 344 | var | public | InferenceOptions.previousResponseId | `public var previousResponseId: String?` |
+| 402 | var | public | InferenceOptions.conversationId | `public var conversationId: String?` |
 | 362 | func | public | InferenceOptions.init(temperature:maxTokens:stopSequences:topP:topK:presencePenalty:frequencyPenalty:toolChoice:seed:parallelToolCalls:truncation:verbosity:providerSettings:previousResponseId:) | `public init(temperature: Double = 1.0, maxTokens: Int? = nil, stopSequences: [String] = [], topP: Double? = nil, topK: Int? = nil, presencePenalty: Double? = nil, frequencyPenalty: Double? = nil, toolChoice: ToolChoice? = nil, seed: Int? = nil, parallelToolCalls: Bool? = nil, truncation: TruncationStrategy? = nil, verbosity: Verbosity? = nil, providerSettings: [String : SendableValue]? = nil, previousResponseId: String? = nil)` |
 | 399 | func | public | InferenceOptions.stopSequences(_:) | `public func stopSequences(_ sequences: String...) -> InferenceOptions` |
 | 408 | func | public | InferenceOptions.addStopSequence(_:) | `public func addStopSequence(_ sequence: String) -> InferenceOptions` |
@@ -342,13 +396,15 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 456 | var | public | InferenceResponse.ParsedToolCall.id | `public let id: String?` |
 | 459 | var | public | InferenceResponse.ParsedToolCall.name | `public let name: String` |
 | 462 | var | public | InferenceResponse.ParsedToolCall.arguments | `public let arguments: [String : SendableValue]` |
-| 469 | func | public | InferenceResponse.ParsedToolCall.init(id:name:arguments:) | `public init(id: String? = nil, name: String, arguments: [String : SendableValue])` |
+| 725 | var | public | InferenceResponse.ParsedToolCall.thoughtSignature | `public let thoughtSignature: String?` |
+| 733 | func | public | InferenceResponse.ParsedToolCall.init(id:name:arguments:thoughtSignature:) | `public init(id: String? = nil, name: String, arguments: [String : SendableValue], thoughtSignature: String? = nil)` |
 | 477 | var | public | InferenceResponse.content | `public let content: String?` |
 | 480 | var | public | InferenceResponse.toolCalls | `public let toolCalls: [InferenceResponse.ParsedToolCall]` |
 | 483 | var | public | InferenceResponse.finishReason | `public let finishReason: InferenceResponse.FinishReason` |
 | 486 | var | public | InferenceResponse.usage | `public let usage: TokenUsage?` |
-| 489 | var | public | InferenceResponse.hasToolCalls | `public var hasToolCalls: Bool { get }` |
-| 499 | func | public | InferenceResponse.init(content:toolCalls:finishReason:usage:) | `public init(content: String? = nil, toolCalls: [InferenceResponse.ParsedToolCall] = [], finishReason: InferenceResponse.FinishReason = .completed, usage: TokenUsage? = nil)` |
+| 671 | var | public | InferenceResponse.transcriptMessages | `public let transcriptMessages: [InferenceMessage]` |
+| 492 | var | public | InferenceResponse.hasToolCalls | `public var hasToolCalls: Bool { get }` |
+| 499 | func | public | InferenceResponse.init(content:toolCalls:finishReason:usage:transcriptMessages:) | `public init(content: String? = nil, toolCalls: [InferenceResponse.ParsedToolCall] = [], finishReason: InferenceResponse.FinishReason = .completed, usage: TokenUsage? = nil, transcriptMessages: [InferenceMessage] = [])` |
 
 ### Core/CircularBuffer.swift
 
@@ -401,7 +457,7 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 40 | var | public | ContextProfile.Strict4kTemplate.summaryCadenceTurns | `public var summaryCadenceTurns: Int` |
 | 41 | var | public | ContextProfile.Strict4kTemplate.summaryTriggerUtilization | `public var summaryTriggerUtilization: Double` |
 | 43 | var | public | ContextProfile.Strict4kTemplate.maxInputTokens | `public var maxInputTokens: Int { get }` |
-| 47 | func | public | ContextProfile.Strict4kTemplate.init(maxTotalContextTokens:systemTokens:historyTokens:memoryTokens:toolIOTokens:outputReserveTokens:protocolOverheadReserveTokens:safetyMarginTokens:maxToolOutputTokens:maxRetrievedItems:maxRetrievedItemTokens:summaryCadenceTurns:summaryTriggerUtilization:) | `public init(maxTotalContextTokens: Int = 4096, systemTokens: Int = 512, historyTokens: Int = 1400, memoryTokens: Int = 900, toolIOTokens: Int = 600, outputReserveTokens: Int = 500, protocolOverheadReserveTokens: Int = 120, safetyMarginTokens: Int = 64, maxToolOutputTokens: Int = 600, maxRetrievedItems: Int = 3, maxRetrievedItemTokens: Int = 300, summaryCadenceTurns: Int = 2, summaryTriggerUtilization: Double = 0.65)` |
+| 47 | func | public | ContextProfile.Strict4kTemplate.init(maxTotalContextTokens:systemTokens:historyTokens:memoryTokens:toolIOTokens:outputReserveTokens:protocolOverheadReserveTokens:safetyMarginTokens:maxToolOutputTokens:maxRetrievedItems:maxRetrievedItemTokens:summaryCadenceTurns:summaryTriggerUtilization:) | `public init(maxTotalContextTokens: Int = 4096, systemTokens: Int = 512, historyTokens: Int = 1400, memoryTokens: Int = 900, toolIOTokens: Int = 600, outputReserveTokens: Int = 500, protocolOverheadReserveTokens: Int = 120, safetyMarginTokens: Int = 64, maxToolOutputTokens: Int = 600, maxRetrievedItems: Int = 3, maxRetrievedItemTokens: Int = 300, summaryCadenceTurns: Int = 2, summaryTriggerUtilization: Double = 0.65) throws` |
 | 99 | struct | public | ContextProfile.PlatformDefaults | `public struct PlatformDefaults` |
 | 101 | var | public | ContextProfile.PlatformDefaults.iOS | `public static let iOS: ContextProfile.PlatformDefaults` |
 | 103 | var | public | ContextProfile.PlatformDefaults.macOS | `public static let macOS: ContextProfile.PlatformDefaults` |
@@ -503,6 +559,7 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 33 | func | public | EnvironmentAgent.run(_:session:observer:) | `public func run(_ input: String, session: (any Session)?, observer: (any AgentObserver)?) async throws -> AgentResult` |
 | 46 | func | public | EnvironmentAgent.stream(_:session:observer:) | `public nonisolated func stream(_ input: String, session: (any Session)?, observer: (any AgentObserver)?) -> AsyncThrowingStream<AgentEvent, any Error>` |
 | 61 | func | public | EnvironmentAgent.cancel() | `public func cancel() async` |
+| 65 | func | public | EnvironmentAgent.handleHandoff(_:context:session:observer:) | `public func handleHandoff(_ request: HandoffRequest, context: AgentContext, session: (any Session)?, observer: (any AgentObserver)?) async throws -> AgentResult` |
 | 86 | func | public | AgentRuntime.environment(_:_:) | `public func environment<V>(_ keyPath: WritableKeyPath<AgentEnvironment, V>, _ value: V) -> EnvironmentAgent where V : Sendable` |
 | 97 | func | public | AgentRuntime.memory(_:) | `public func memory(_ memory: any Memory) -> EnvironmentAgent` |
 
@@ -510,75 +567,92 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
-| 22 | enum | public | AgentContextKey | `public enum AgentContextKey` |
-| 24 | case | public | AgentContextKey.originalInput | `public case originalInput` |
-| 27 | case | public | AgentContextKey.previousOutput | `public case previousOutput` |
-| 30 | case | public | AgentContextKey.currentAgentName | `public case currentAgentName` |
-| 33 | case | public | AgentContextKey.executionPath | `public case executionPath` |
-| 36 | case | public | AgentContextKey.startTime | `public case startTime` |
-| 39 | case | public | AgentContextKey.metadata | `public case metadata` |
-| 66 | protocol | public | AgentContextProviding | `public protocol AgentContextProviding : Sendable` |
-| 68 | var | public | AgentContextProviding.contextKey | `public static var contextKey: String { get }` |
-| 98 | class | public | AgentContext | `public actor AgentContext` |
-| 102 | var | public | AgentContext.originalInput | `public nonisolated let originalInput: String` |
-| 105 | var | public | AgentContext.executionId | `public nonisolated let executionId: UUID` |
-| 108 | var | public | AgentContext.createdAt | `public nonisolated let createdAt: Date` |
-| 111 | var | public | AgentContext.allKeys | `public var allKeys: [String] { get }` |
-| 119 | var | public | AgentContext.snapshot | `public var snapshot: [String : SendableValue] { get }` |
-| 130 | func | public | AgentContext.init(input:initialValues:) | `public init(input: String, initialValues: [String : SendableValue] = [:])` |
-| 149 | func | public | AgentContext.get(_:) | `public func get(_ key: String) -> SendableValue?` |
-| 157 | func | public | AgentContext.get(_:) | `public func get(_ key: AgentContextKey) -> SendableValue?` |
-| 166 | func | public | AgentContext.set(_:value:) | `public func set(_ key: String, value: SendableValue)` |
-| 175 | func | public | AgentContext.set(_:value:) | `public func set(_ key: AgentContextKey, value: SendableValue)` |
-| 184 | func | public | AgentContext.remove(_:) | `public @discardableResult func remove(_ key: String) -> SendableValue?` |
-| 193 | func | public | AgentContext.addMessage(_:) | `public func addMessage(_ message: MemoryMessage)` |
-| 203 | func | public | AgentContext.getMessages() | `public func getMessages() -> [MemoryMessage]` |
-| 208 | func | public | AgentContext.clearMessages() | `public func clearMessages()` |
-| 220 | func | public | AgentContext.recordExecution(agentName:) | `public func recordExecution(agentName: String)` |
-| 231 | func | public | AgentContext.getExecutionPath() | `public func getExecutionPath() -> [String]` |
-| 243 | func | public | AgentContext.setPreviousOutput(_:) | `public func setPreviousOutput(_ result: AgentResult)` |
-| 250 | func | public | AgentContext.getPreviousOutput() | `public func getPreviousOutput() -> String?` |
-| 270 | func | public | AgentContext.merge(from:overwrite:) | `public func merge(from other: AgentContext, overwrite: Bool = false) async` |
-| 309 | func | public | AgentContext.copy(additionalValues:) | `public func copy(additionalValues: [String : SendableValue] = [:]) -> AgentContext` |
-| 334 | func | public | AgentContext.setTyped(_:) | `public func setTyped<T>(_ context: T) where T : AgentContextProviding` |
-| 342 | func | public | AgentContext.typed(_:) | `public func typed<T>(_: T.Type) -> T? where T : AgentContextProviding` |
-| 351 | func | public | AgentContext.removeTyped(_:) | `public @discardableResult func removeTyped<T>(_: T.Type) -> T? where T : AgentContextProviding` |
-| 359 | func | public | AgentContext.hasTyped(_:) | `public func hasTyped<T>(_: T.Type) -> Bool where T : AgentContextProviding` |
-| 383 | var | public | AgentContext.description | `public nonisolated var description: String { get }` |
-| 397 | var | public | AgentContext.debugDescription | `public nonisolated var debugDescription: String { get }` |
+| 24 | enum | public | AgentContextKey | `public enum AgentContextKey` _(Availability: * (deprecated); Use typed ContextKey orchestration statics such as ContextKey.originalInput.)_ |
+| 26 | case | public | AgentContextKey.originalInput | `public case originalInput` |
+| 29 | case | public | AgentContextKey.previousOutput | `public case previousOutput` |
+| 32 | case | public | AgentContextKey.currentAgentName | `public case currentAgentName` |
+| 35 | case | public | AgentContextKey.executionPath | `public case executionPath` |
+| 38 | case | public | AgentContextKey.startTime | `public case startTime` |
+| 41 | case | public | AgentContextKey.metadata | `public case metadata` |
+| 81 | protocol | public | AgentContextProviding | `public protocol AgentContextProviding : Sendable` (Availability: * (deprecated); Use `ContextKey<Value>` with `setTyped(_:value:)` / `getTyped(_:)` instead; this protocol will be removed in 0.7.0.) |
+| 83 | var | public | AgentContextProviding.contextKey | `public static var contextKey: String { get }` |
+| 118 | class | public | AgentContext | `public actor AgentContext` |
+| 122 | var | public | AgentContext.originalInput | `public nonisolated let originalInput: String` |
+| 125 | var | public | AgentContext.executionId | `public nonisolated let executionId: UUID` |
+| 128 | var | public | AgentContext.createdAt | `public nonisolated let createdAt: Date` |
+| 134 | var | public | AgentContext.allKeys | `public var allKeys: [String] { get }` |
+| 149 | var | public | AgentContext.snapshot | `public var snapshot: [String : SendableValue] { get }` |
+| 164 | func | public | AgentContext.init(input:initialValues:) | `public init(input: String, initialValues: [String : SendableValue] = [:])` |
+| 206 | func | public | AgentContext.get(_:) | `public func get(_ key: String) -> SendableValue?` |
+| 216 | func | public | AgentContext.get(_:) | `public func get(_ key: AgentContextKey) -> SendableValue?` _(Availability: * (deprecated); Use typed ContextKey accessors such as get(.originalInput).)_ |
+| 225 | func | public | AgentContext.set(_:value:) | `public func set(_ key: String, value: SendableValue)` |
+| 240 | func | public | AgentContext.set(_:value:) | `public func set(_ key: AgentContextKey, value: SendableValue)` _(Availability: * (deprecated); Use typed ContextKey accessors such as set(.originalInput, _).)_ |
+| 283 | func | public | AgentContext.remove(_:) | `public @discardableResult func remove(_ key: String) -> SendableValue?` |
+| 292 | func | public | AgentContext.addMessage(_:) | `public func addMessage(_ message: MemoryMessage)` |
+| 302 | func | public | AgentContext.getMessages() | `public func getMessages() -> [MemoryMessage]` |
+| 307 | func | public | AgentContext.clearMessages() | `public func clearMessages()` |
+| 319 | func | public | AgentContext.recordExecution(agentName:) | `public func recordExecution(agentName: String)` |
+| 328 | func | public | AgentContext.getExecutionPath() | `public func getExecutionPath() -> [String]` |
+| 340 | func | public | AgentContext.setPreviousOutput(_:) | `public func setPreviousOutput(_ result: AgentResult)` |
+| 347 | func | public | AgentContext.getPreviousOutput() | `public func getPreviousOutput() -> String?` |
+| 367 | func | public | AgentContext.merge(from:overwrite:) | `public func merge(from other: AgentContext, overwrite: Bool = false) async` |
+| 421 | func | public | AgentContext.copy(additionalValues:) | `public func copy(additionalValues: [String : SendableValue] = [:]) -> AgentContext` |
+| 449 | func | public | AgentContext.setTyped(_:) | `public func setTyped<T>(_ context: T) where T : AgentContextProviding` (Availability: * (deprecated); Use `ContextKey<Value>` with `setTyped(_:value:)` instead; this overload will be removed in 0.7.0.) |
+| 458 | func | public | AgentContext.typed(_:) | `public func typed<T>(_: T.Type) -> T? where T : AgentContextProviding` (Availability: * (deprecated); Use `ContextKey<Value>` with `getTyped(_:)` instead; this overload will be removed in 0.7.0.) |
+| 468 | func | public | AgentContext.removeTyped(_:) | `public @discardableResult func removeTyped<T>(_: T.Type) -> T? where T : AgentContextProviding` (Availability: * (deprecated); Use `ContextKey<Value>` with `removeTyped(_:)` instead; this overload will be removed in 0.7.0.) |
+| 477 | func | public | AgentContext.hasTyped(_:) | `public func hasTyped<T>(_: T.Type) -> Bool where T : AgentContextProviding` (Availability: * (deprecated); Use `ContextKey<Value>` with `hasTyped(_:)` instead; this overload will be removed in 0.7.0.) |
+| 574 | var | public | AgentContext.description | `public nonisolated var description: String { get }` |
+| 588 | var | public | AgentContext.debugDescription | `public nonisolated var debugDescription: String { get }` |
 
 ### Core/Execution/ContextKey.swift
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
-| 30 | struct | public | ContextKey | `public struct ContextKey<Value> where Value : Sendable` |
-| 32 | var | public | ContextKey.name | `public let name: String` |
-| 37 | func | public | ContextKey.init(_:) | `public init(_ name: String)` |
-| 43 | func | public | ContextKey.==(_:_:) | `public static func == (lhs: ContextKey<Value>, rhs: ContextKey<Value>) -> Bool` |
-| 49 | func | public | ContextKey.hash(into:) | `public func hash(into hasher: inout Hasher)` |
-| 58 | var | public | ContextKey.userID | `public static let userID: ContextKey<String>` |
-| 61 | var | public | ContextKey.sessionID | `public static let sessionID: ContextKey<String>` |
-| 64 | var | public | ContextKey.correlationID | `public static let correlationID: ContextKey<String>` |
-| 67 | var | public | ContextKey.language | `public static let language: ContextKey<String>` |
-| 70 | var | public | ContextKey.apiVersion | `public static let apiVersion: ContextKey<String>` |
-| 77 | var | public | ContextKey.requestCount | `public static let requestCount: ContextKey<Int>` |
-| 80 | var | public | ContextKey.retryCount | `public static let retryCount: ContextKey<Int>` |
-| 83 | var | public | ContextKey.iterationCount | `public static let iterationCount: ContextKey<Int>` |
-| 86 | var | public | ContextKey.depth | `public static let depth: ContextKey<Int>` |
-| 93 | var | public | ContextKey.isAuthenticated | `public static let isAuthenticated: ContextKey<Bool>` |
-| 96 | var | public | ContextKey.isDebugMode | `public static let isDebugMode: ContextKey<Bool>` |
-| 99 | var | public | ContextKey.verboseLogging | `public static let verboseLogging: ContextKey<Bool>` |
-| 102 | var | public | ContextKey.isDryRun | `public static let isDryRun: ContextKey<Bool>` |
-| 109 | var | public | ContextKey.permissions | `public static let permissions: ContextKey<[String]>` |
-| 112 | var | public | ContextKey.tags | `public static let tags: ContextKey<[String]>` |
-| 115 | var | public | ContextKey.featureFlags | `public static let featureFlags: ContextKey<[String]>` |
-| 122 | var | public | ContextKey.timestamp | `public static let timestamp: ContextKey<Date>` |
-| 125 | var | public | ContextKey.expiresAt | `public static let expiresAt: ContextKey<Date>` |
-| 142 | func | public | AgentContext.setTyped(_:value:) | `public func setTyped<T>(_ key: ContextKey<T>, value: T) where T : Encodable, T : Sendable` |
-| 162 | func | public | AgentContext.getTyped(_:) | `public func getTyped<T>(_ key: ContextKey<T>) -> T? where T : Decodable, T : Sendable` |
-| 215 | func | public | AgentContext.getTyped(_:default:) | `public func getTyped<T>(_ key: ContextKey<T>, default defaultValue: T) -> T where T : Decodable, T : Sendable` |
-| 227 | func | public | AgentContext.removeTyped(_:) | `public func removeTyped(_ key: ContextKey<some Sendable>)` |
-| 242 | func | public | AgentContext.hasTyped(_:) | `public func hasTyped(_ key: ContextKey<some Sendable>) -> Bool` |
+| 38 | struct | public | ContextKey | `public struct ContextKey<Value> where Value : Sendable` |
+| 40 | var | public | ContextKey.name | `public let name: String` |
+| 45 | func | public | ContextKey.init(_:) | `public init(_ name: String)` |
+| 51 | func | public | ContextKey.==(_:_:) | `public static func == (lhs: ContextKey<Value>, rhs: ContextKey<Value>) -> Bool` |
+| 57 | func | public | ContextKey.hash(into:) | `public func hash(into hasher: inout Hasher)` |
+| 66 | var | public | ContextKey.userID | `public static let userID: ContextKey<String>` |
+| 69 | var | public | ContextKey.sessionID | `public static let sessionID: ContextKey<String>` |
+| 72 | var | public | ContextKey.correlationID | `public static let correlationID: ContextKey<String>` |
+| 75 | var | public | ContextKey.language | `public static let language: ContextKey<String>` |
+| 78 | var | public | ContextKey.apiVersion | `public static let apiVersion: ContextKey<String>` |
+| 81 | var | public | ContextKey.originalInput | `public static let originalInput: ContextKey<String>` |
+| 84 | var | public | ContextKey.previousOutput | `public static let previousOutput: ContextKey<String>` |
+| 87 | var | public | ContextKey.currentAgentName | `public static let currentAgentName: ContextKey<String>` |
+| 94 | var | public | ContextKey.requestCount | `public static let requestCount: ContextKey<Int>` |
+| 97 | var | public | ContextKey.retryCount | `public static let retryCount: ContextKey<Int>` |
+| 100 | var | public | ContextKey.iterationCount | `public static let iterationCount: ContextKey<Int>` |
+| 103 | var | public | ContextKey.depth | `public static let depth: ContextKey<Int>` |
+| 110 | var | public | ContextKey.isAuthenticated | `public static let isAuthenticated: ContextKey<Bool>` |
+| 113 | var | public | ContextKey.isDebugMode | `public static let isDebugMode: ContextKey<Bool>` |
+| 116 | var | public | ContextKey.verboseLogging | `public static let verboseLogging: ContextKey<Bool>` |
+| 119 | var | public | ContextKey.isDryRun | `public static let isDryRun: ContextKey<Bool>` |
+| 126 | var | public | ContextKey.permissions | `public static let permissions: ContextKey<[String]>` |
+| 129 | var | public | ContextKey.tags | `public static let tags: ContextKey<[String]>` |
+| 132 | var | public | ContextKey.featureFlags | `public static let featureFlags: ContextKey<[String]>` |
+| 135 | var | public | ContextKey.executionPath | `public static let executionPath: ContextKey<[String]>` |
+| 142 | var | public | ContextKey.timestamp | `public static let timestamp: ContextKey<Date>` |
+| 145 | var | public | ContextKey.expiresAt | `public static let expiresAt: ContextKey<Date>` |
+| 148 | var | public | ContextKey.startTime | `public static let startTime: ContextKey<Date>` |
+| 166 | func | public | AgentContext.set(_:_:) | `public func set(_ key: ContextKey<String>, _ value: String)` |
+| 173 | func | public | AgentContext.get(_:) | `public func get(_ key: ContextKey<String>) -> String?` |
+| 178 | func | public | AgentContext.set(_:_:) | `public func set(_ key: ContextKey<Int>, _ value: Int)` |
+| 184 | func | public | AgentContext.get(_:) | `public func get(_ key: ContextKey<Int>) -> Int?` |
+| 189 | func | public | AgentContext.set(_:_:) | `public func set(_ key: ContextKey<Bool>, _ value: Bool)` |
+| 195 | func | public | AgentContext.get(_:) | `public func get(_ key: ContextKey<Bool>) -> Bool?` |
+| 200 | func | public | AgentContext.set(_:_:) | `public func set(_ key: ContextKey<Double>, _ value: Double)` |
+| 206 | func | public | AgentContext.get(_:) | `public func get(_ key: ContextKey<Double>) -> Double?` |
+| 211 | func | public | AgentContext.set(_:_:) | `public func set(_ key: ContextKey<[String]>, _ value: [String])` |
+| 217 | func | public | AgentContext.get(_:) | `public func get(_ key: ContextKey<[String]>) -> [String]?` |
+| 225 | func | public | AgentContext.set(_:_:) | `public func set(_ key: ContextKey<Date>, _ value: Date)` |
+| 231 | func | public | AgentContext.get(_:) | `public func get(_ key: ContextKey<Date>) -> Date?` |
+| 256 | func | public | AgentContext.setTyped(_:value:) | `public func setTyped<T>(_ key: ContextKey<T>, value: T) where T : Encodable, T : Sendable` |
+| 273 | func | public | AgentContext.getTyped(_:) | `public func getTyped<T>(_ key: ContextKey<T>) -> T? where T : Decodable, T : Sendable` |
+| 289 | func | public | AgentContext.getTyped(_:default:) | `public func getTyped<T>(_ key: ContextKey<T>, default defaultValue: T) -> T where T : Decodable, T : Sendable` |
+| 304 | func | public | AgentContext.removeTyped(_:) | `public func removeTyped(_ key: ContextKey<some Sendable>)` |
+| 319 | func | public | AgentContext.hasTyped(_:) | `public func hasTyped(_ key: ContextKey<some Sendable>) -> Bool` |
 
 ### Core/Handoff/Handoff.swift
 
@@ -598,9 +672,7 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 94 | var | public | HandoffResult.transferredContext | `public let transferredContext: [String : SendableValue]` |
 | 97 | var | public | HandoffResult.timestamp | `public let timestamp: Date` |
 | 107 | func | public | HandoffResult.init(targetAgentName:input:result:transferredContext:timestamp:) | `public init(targetAgentName: String, input: String, result: AgentResult, transferredContext: [String : SendableValue], timestamp: Date = Date())` |
-| 159 | protocol | public | HandoffReceiver | `public protocol HandoffReceiver : AgentRuntime` |
-| 174 | func | public | HandoffReceiver.handleHandoff(_:context:) | `public func handleHandoff(_ request: HandoffRequest, context: AgentContext) async throws -> AgentResult` |
-| 197 | func | public | HandoffReceiver.handleHandoff(_:context:) | `public func handleHandoff(_ request: HandoffRequest, context: AgentContext) async throws -> AgentResult` |
+| 129 | protocol | public | HandoffReceiver | `@available(*, deprecated, message: "Use AgentRuntime.handleHandoff(_:context:session:observer:) instead.") public protocol HandoffReceiver : AgentRuntime` |
 | 457 | var | public | HandoffRequest.description | `public var description: String { get }` |
 | 472 | var | public | HandoffResult.description | `public var description: String { get }` |
 
@@ -608,28 +680,18 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
-| 35 | struct | public | HandoffBuilder | `public struct HandoffBuilder<Target> where Target : AgentRuntime` |
-| 43 | func | public | HandoffBuilder.init(to:) | `public init(to target: Target)` |
-| 63 | func | public | HandoffBuilder.toolName(_:) | `public func toolName(_ name: String) -> HandoffBuilder<Target>` |
-| 82 | func | public | HandoffBuilder.toolDescription(_:) | `public func toolDescription(_ description: String) -> HandoffBuilder<Target>` |
-| 105 | func | public | HandoffBuilder.onTransfer(_:) | `public func onTransfer(_ callback: @escaping OnTransferCallback) -> HandoffBuilder<Target>` |
-| 128 | func | public | HandoffBuilder.transform(_:) | `public func transform(_ filter: @escaping TransformCallback) -> HandoffBuilder<Target>` |
-| 150 | func | public | HandoffBuilder.when(_:) | `public func when(_ check: @escaping WhenCallback) -> HandoffBuilder<Target>` |
-| 170 | func | public | HandoffBuilder.history(_:) | `public func history(_ history: HandoffHistory) -> HandoffBuilder<Target>` |
-| 189 | func | public | HandoffBuilder.build() | `public func build() -> HandoffConfiguration<Target>` |
-| 227 | func | public | handoff(to:name:description:onTransfer:transform:when:history:) | `public func handoff<T>(to target: T, name: String? = nil, description: String? = nil, onTransfer: OnTransferCallback? = nil, transform: TransformCallback? = nil, when: WhenCallback? = nil, history: HandoffHistory = .none) -> HandoffConfiguration<T> where T : AgentRuntime` |
-| 262 | struct | public | AnyHandoffConfiguration | `public struct AnyHandoffConfiguration` |
-| 264 | var | public | AnyHandoffConfiguration.targetAgent | `public let targetAgent: any AgentRuntime` |
-| 267 | var | public | AnyHandoffConfiguration.toolNameOverride | `public let toolNameOverride: String?` |
-| 270 | var | public | AnyHandoffConfiguration.toolDescription | `public let toolDescription: String?` |
-| 273 | var | public | AnyHandoffConfiguration.onTransfer | `public let onTransfer: OnTransferCallback?` |
-| 276 | var | public | AnyHandoffConfiguration.transform | `public let transform: TransformCallback?` |
-| 279 | var | public | AnyHandoffConfiguration.when | `public let when: WhenCallback?` |
-| 282 | var | public | AnyHandoffConfiguration.nestHandoffHistory | `public let nestHandoffHistory: Bool` |
-| 289 | func | public | AnyHandoffConfiguration.init(_:) | `public init(_ configuration: HandoffConfiguration<some AgentRuntime>)` |
-| 309 | func | public | AnyHandoffConfiguration.init(targetAgent:toolNameOverride:toolDescription:onTransfer:transform:when:nestHandoffHistory:) | `public init(targetAgent: any AgentRuntime, toolNameOverride: String? = nil, toolDescription: String? = nil, onTransfer: OnTransferCallback? = nil, transform: TransformCallback? = nil, when: WhenCallback? = nil, nestHandoffHistory: Bool = false)` |
-| 332 | var | public | AnyHandoffConfiguration.effectiveToolName | `public var effectiveToolName: String { get }` |
-| 341 | var | public | AnyHandoffConfiguration.effectiveToolDescription | `public var effectiveToolDescription: String { get }` |
+| 23 | struct | public | AnyHandoffConfiguration | `public struct AnyHandoffConfiguration` |
+| 25 | var | public | AnyHandoffConfiguration.targetAgent | `public let targetAgent: any AgentRuntime` |
+| 28 | var | public | AnyHandoffConfiguration.toolNameOverride | `public let toolNameOverride: String?` |
+| 31 | var | public | AnyHandoffConfiguration.toolDescription | `public let toolDescription: String?` |
+| 34 | var | public | AnyHandoffConfiguration.onTransfer | `public let onTransfer: OnTransferCallback?` |
+| 37 | var | public | AnyHandoffConfiguration.transform | `public let transform: TransformCallback?` |
+| 40 | var | public | AnyHandoffConfiguration.when | `public let when: WhenCallback?` |
+| 43 | var | public | AnyHandoffConfiguration.nestHandoffHistory | `public let nestHandoffHistory: Bool` |
+| 50 | func | public | AnyHandoffConfiguration.init(_:) | `public init(_ configuration: HandoffConfiguration<some AgentRuntime>)` |
+| 70 | func | public | AnyHandoffConfiguration.init(targetAgent:toolNameOverride:toolDescription:onTransfer:transform:when:nestHandoffHistory:) | `public init(targetAgent: any AgentRuntime, toolNameOverride: String? = nil, toolDescription: String? = nil, onTransfer: OnTransferCallback? = nil, transform: TransformCallback? = nil, when: WhenCallback? = nil, nestHandoffHistory: Bool = false)` |
+| 93 | var | public | AnyHandoffConfiguration.effectiveToolName | `public var effectiveToolName: String { get }` |
+| 102 | var | public | AnyHandoffConfiguration.effectiveToolDescription | `public var effectiveToolDescription: String { get }` |
 
 ### Core/Handoff/HandoffConfiguration.swift
 
@@ -736,8 +798,6 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 27 | case | public | InferenceStreamEvent.finishReason(_:) | `public case finishReason(String)` |
 | 30 | case | public | InferenceStreamEvent.usage(promptTokens:completionTokens:) | `public case usage(promptTokens: Int, completionTokens: Int)` |
 | 33 | case | public | InferenceStreamEvent.done | `public case done` |
-| 39 | protocol | public | InferenceStreamingProvider | `public protocol InferenceStreamingProvider : Sendable` |
-| 47 | func | public | InferenceStreamingProvider.streamWithToolCalls(prompt:tools:options:) | `public func streamWithToolCalls(prompt: String, tools: [ToolSchema], options: InferenceOptions) -> AsyncThrowingStream<InferenceStreamEvent, any Error>` |
 
 ### Core/Logger+Swarm.swift
 
@@ -855,7 +915,7 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 106 | class | public | ResponseTracker | `public actor ResponseTracker` |
 | 115 | var | public | ResponseTracker.maxHistorySize | `public nonisolated let maxHistorySize: Int` |
 | 125 | var | public | ResponseTracker.maxSessions | `public nonisolated let maxSessions: Int?` |
-| 153 | func | public | ResponseTracker.init(maxHistorySize:maxSessions:) | `public init(maxHistorySize: Int = 100, maxSessions: Int? = 1000)` |
+| 156 | func | public | ResponseTracker.init(maxHistorySize:maxSessions:now:) | `public init(maxHistorySize: Int = 100, maxSessions: Int? = 1000, now: @escaping @Sendable () -> Date = { TurnEnvironment.live.now() })` |
 | 194 | func | public | ResponseTracker.recordResponse(_:sessionId:) | `public func recordResponse(_ response: AgentResponse, sessionId: String)` |
 | 248 | func | public | ResponseTracker.getLatestResponseId(for:) | `public func getLatestResponseId(for sessionId: String) -> String?` |
 | 272 | func | public | ResponseTracker.getResponse(responseId:sessionId:) | `public func getResponse(responseId: String, sessionId: String) -> AgentResponse?` |
@@ -882,8 +942,10 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 84 | func | public | AgentObserver.onToolStart(context:agent:call:) | `public func onToolStart(context: AgentContext?, agent: any AgentRuntime, call: ToolCall) async` |
 | 89 | func | public | AgentObserver.onToolCallPartial(context:agent:update:) | `public func onToolCallPartial(context: AgentContext?, agent: any AgentRuntime, update: PartialToolCallUpdate) async` |
 | 98 | func | public | AgentObserver.onToolEnd(context:agent:result:) | `public func onToolEnd(context: AgentContext?, agent: any AgentRuntime, result: ToolResult) async` |
-| 107 | func | public | AgentObserver.onLLMStart(context:agent:systemPrompt:inputMessages:) | `public func onLLMStart(context: AgentContext?, agent: any AgentRuntime, systemPrompt: String?, inputMessages: [MemoryMessage]) async` |
-| 116 | func | public | AgentObserver.onLLMEnd(context:agent:response:usage:) | `public func onLLMEnd(context: AgentContext?, agent: any AgentRuntime, response: String, usage: TokenUsage?) async` |
+| 117 | func | public | AgentObserver.onToolEnd(context:agent:invocation:) | `public func onToolEnd(context: AgentContext?, agent: any AgentRuntime, invocation: ToolInvocation) async` |
+| 129 | func | public | AgentObserver.onLLMStart(context:agent:systemPrompt:inputMessages:) | `public func onLLMStart(context: AgentContext?, agent: any AgentRuntime, systemPrompt: String?, inputMessages: [InferenceMessage]) async` |
+| 145 | func | public | AgentObserver.onLLMStart(context:agent:systemPrompt:inputMessages:) | `@available(*, deprecated, message: "Use onLLMStart(context:agent:systemPrompt:inputMessages:) with [InferenceMessage]. InferenceMessage is the source of truth; this MemoryMessage requirement will be removed in 0.7.") public func onLLMStart(context: AgentContext?, agent: any AgentRuntime, systemPrompt: String?, inputMessages: [MemoryMessage]) async` |
+| 154 | func | public | AgentObserver.onLLMEnd(context:agent:response:usage:) | `public func onLLMEnd(context: AgentContext?, agent: any AgentRuntime, response: String, usage: TokenUsage?) async` |
 | 125 | func | public | AgentObserver.onGuardrailTriggered(context:guardrailName:guardrailType:result:) | `public func onGuardrailTriggered(context: AgentContext?, guardrailName: String, guardrailType: GuardrailType, result: GuardrailResult) async` |
 | 133 | func | public | AgentObserver.onThinking(context:agent:thought:) | `public func onThinking(context: AgentContext?, agent: any AgentRuntime, thought: String) async` |
 | 141 | func | public | AgentObserver.onThinkingPartial(context:agent:partialThought:) | `public func onThinkingPartial(context: AgentContext?, agent: any AgentRuntime, partialThought: String) async` |
@@ -897,8 +959,10 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 184 | func | public | AgentObserver.onToolStart(context:agent:call:) | `public func onToolStart(context: AgentContext?, agent: any AgentRuntime, call: ToolCall) async` |
 | 187 | func | public | AgentObserver.onToolCallPartial(context:agent:update:) | `public func onToolCallPartial(context: AgentContext?, agent: any AgentRuntime, update: PartialToolCallUpdate) async` |
 | 190 | func | public | AgentObserver.onToolEnd(context:agent:result:) | `public func onToolEnd(context: AgentContext?, agent: any AgentRuntime, result: ToolResult) async` |
-| 193 | func | public | AgentObserver.onLLMStart(context:agent:systemPrompt:inputMessages:) | `public func onLLMStart(context _: AgentContext?, agent _: any AgentRuntime, systemPrompt _: String?, inputMessages _: [MemoryMessage]) async` |
-| 196 | func | public | AgentObserver.onLLMEnd(context:agent:response:usage:) | `public func onLLMEnd(context _: AgentContext?, agent _: any AgentRuntime, response _: String, usage _: TokenUsage?) async` |
+| 244 | func | public | AgentObserver.onToolEnd(context:agent:invocation:) | `public func onToolEnd(context: AgentContext?, agent: any AgentRuntime, invocation: ToolInvocation) async` |
+| 249 | func | public | AgentObserver.onLLMStart(context:agent:systemPrompt:inputMessages:) | `public func onLLMStart(context _: AgentContext?, agent _: any AgentRuntime, systemPrompt _: String?, inputMessages _: [InferenceMessage]) async` |
+| 253 | func | public | AgentObserver.onLLMStart(context:agent:systemPrompt:inputMessages:) | `@available(*, deprecated, message: "Use onLLMStart(context:agent:systemPrompt:inputMessages:) with [InferenceMessage]. InferenceMessage is the source of truth; this MemoryMessage requirement will be removed in 0.7.") public func onLLMStart(context _: AgentContext?, agent _: any AgentRuntime, systemPrompt _: String?, inputMessages _: [MemoryMessage]) async` |
+| 256 | func | public | AgentObserver.onLLMEnd(context:agent:response:usage:) | `public func onLLMEnd(context _: AgentContext?, agent _: any AgentRuntime, response _: String, usage _: TokenUsage?) async` |
 | 199 | func | public | AgentObserver.onGuardrailTriggered(context:guardrailName:guardrailType:result:) | `public func onGuardrailTriggered(context _: AgentContext?, guardrailName _: String, guardrailType _: GuardrailType, result _: GuardrailResult) async` |
 | 202 | func | public | AgentObserver.onThinking(context:agent:thought:) | `public func onThinking(context _: AgentContext?, agent _: any AgentRuntime, thought _: String) async` |
 | 205 | func | public | AgentObserver.onThinkingPartial(context:agent:partialThought:) | `public func onThinkingPartial(context _: AgentContext?, agent _: any AgentRuntime, partialThought _: String) async` |
@@ -914,8 +978,9 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 300 | func | public | CompositeObserver.onToolStart(context:agent:call:) | `public func onToolStart(context: AgentContext?, agent: any AgentRuntime, call: ToolCall) async` |
 | 310 | func | public | CompositeObserver.onToolCallPartial(context:agent:update:) | `public func onToolCallPartial(context: AgentContext?, agent: any AgentRuntime, update: PartialToolCallUpdate) async` |
 | 320 | func | public | CompositeObserver.onToolEnd(context:agent:result:) | `public func onToolEnd(context: AgentContext?, agent: any AgentRuntime, result: ToolResult) async` |
-| 330 | func | public | CompositeObserver.onLLMStart(context:agent:systemPrompt:inputMessages:) | `public func onLLMStart(context: AgentContext?, agent: any AgentRuntime, systemPrompt: String?, inputMessages: [MemoryMessage]) async` |
-| 340 | func | public | CompositeObserver.onLLMEnd(context:agent:response:usage:) | `public func onLLMEnd(context: AgentContext?, agent: any AgentRuntime, response: String, usage: TokenUsage?) async` |
+| 399 | func | public | CompositeObserver.onLLMStart(context:agent:systemPrompt:inputMessages:) | `public func onLLMStart(context: AgentContext?, agent: any AgentRuntime, systemPrompt: String?, inputMessages: [InferenceMessage]) async` |
+| 410 | func | public | CompositeObserver.onLLMStart(context:agent:systemPrompt:inputMessages:) | `@available(*, deprecated, message: "Use onLLMStart(context:agent:systemPrompt:inputMessages:) with [InferenceMessage]. InferenceMessage is the source of truth; this MemoryMessage requirement will be removed in 0.7.") package func onLLMStart(context: AgentContext?, agent: any AgentRuntime, systemPrompt: String?, inputMessages: [MemoryMessage]) async` |
+| 420 | func | public | CompositeObserver.onLLMEnd(context:agent:response:usage:) | `public func onLLMEnd(context: AgentContext?, agent: any AgentRuntime, response: String, usage: TokenUsage?) async` |
 | 350 | func | public | CompositeObserver.onGuardrailTriggered(context:guardrailName:guardrailType:result:) | `public func onGuardrailTriggered(context: AgentContext?, guardrailName: String, guardrailType: GuardrailType, result: GuardrailResult) async` |
 | 360 | func | public | CompositeObserver.onThinking(context:agent:thought:) | `public func onThinking(context: AgentContext?, agent: any AgentRuntime, thought: String) async` |
 | 370 | func | public | CompositeObserver.onThinkingPartial(context:agent:partialThought:) | `public func onThinkingPartial(context: AgentContext?, agent: any AgentRuntime, partialThought: String) async` |
@@ -930,8 +995,9 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 475 | func | public | LoggingObserver.onHandoff(context:fromAgent:toAgent:) | `public func onHandoff(context: AgentContext?, fromAgent: any AgentRuntime, toAgent: any AgentRuntime) async` |
 | 486 | func | public | LoggingObserver.onToolStart(context:agent:call:) | `public func onToolStart(context: AgentContext?, agent _: any AgentRuntime, call: ToolCall) async` |
 | 495 | func | public | LoggingObserver.onToolEnd(context:agent:result:) | `public func onToolEnd(context: AgentContext?, agent _: any AgentRuntime, result: ToolResult) async` |
-| 507 | func | public | LoggingObserver.onLLMStart(context:agent:systemPrompt:inputMessages:) | `public func onLLMStart(context: AgentContext?, agent _: any AgentRuntime, systemPrompt _: String?, inputMessages: [MemoryMessage]) async` |
-| 516 | func | public | LoggingObserver.onLLMEnd(context:agent:response:usage:) | `public func onLLMEnd(context: AgentContext?, agent _: any AgentRuntime, response _: String, usage: TokenUsage?) async` |
+| 628 | func | public | LoggingObserver.onToolEnd(context:agent:invocation:) | `public func onToolEnd(context: AgentContext?, agent _: any AgentRuntime, invocation: ToolInvocation) async` |
+| 640 | func | public | LoggingObserver.onLLMStart(context:agent:systemPrompt:inputMessages:) | `public func onLLMStart(context: AgentContext?, agent _: any AgentRuntime, systemPrompt _: String?, inputMessages: [InferenceMessage]) async` |
+| 649 | func | public | LoggingObserver.onLLMEnd(context:agent:response:usage:) | `public func onLLMEnd(context: AgentContext?, agent _: any AgentRuntime, response _: String, usage: TokenUsage?) async` |
 | 530 | func | public | LoggingObserver.onGuardrailTriggered(context:guardrailName:guardrailType:result:) | `public func onGuardrailTriggered(context: AgentContext?, guardrailName: String, guardrailType: GuardrailType, result: GuardrailResult) async` |
 | 540 | func | public | LoggingObserver.onThinking(context:agent:thought:) | `public func onThinking(context: AgentContext?, agent _: any AgentRuntime, thought: String) async` |
 | 550 | func | public | LoggingObserver.onOutputToken(context:agent:token:) | `public func onOutputToken(context: AgentContext?, agent _: any AgentRuntime, token: String) async` |
@@ -1024,27 +1090,31 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 719 | func | public | AsyncThrowingStream.compactMap(_:) | `public func compactMap<T>(_ transform: @escaping (AgentEvent) async throws -> T?) -> AsyncThrowingStream<T, any Error> where T : Sendable` |
 | 747 | func | public | AsyncThrowingStream.distinctUntilChanged() | `public func distinctUntilChanged() -> AsyncThrowingStream<AgentEvent, any Error>` |
 | 798 | func | public | AsyncThrowingStream.scan(_:_:) | `public func scan<T>(_ initial: T, _ combine: @escaping (T, AgentEvent) async throws -> T) -> AsyncThrowingStream<T, any Error> where T : Sendable` |
-| 817 | enum | public | MergeErrorStrategy | `public enum MergeErrorStrategy` |
-| 819 | case | public | MergeErrorStrategy.failFast | `public case failFast` |
-| 823 | case | public | MergeErrorStrategy.continueAndCollect | `public case continueAndCollect` |
-| 827 | case | public | MergeErrorStrategy.ignoreErrors | `public case ignoreErrors` |
-| 833 | enum | public | AgentEventStream | `public enum AgentEventStream` |
-| 860 | func | public | AgentEventStream.merge(_:errorStrategy:) | `public static func merge(_ streams: AsyncThrowingStream<AgentEvent, any Error>..., errorStrategy: MergeErrorStrategy = .continueAndCollect) -> AsyncThrowingStream<AgentEvent, any Error>` |
-| 904 | func | public | AgentEventStream.empty() | `public static func empty() -> AsyncThrowingStream<AgentEvent, any Error>` |
-| 923 | func | public | AgentEventStream.from(_:) | `public static func from(_ events: [AgentEvent]) -> AsyncThrowingStream<AgentEvent, any Error>` |
-| 936 | func | public | AgentEventStream.just(_:) | `public static func just(_ event: AgentEvent) -> AsyncThrowingStream<AgentEvent, any Error>` |
-| 944 | func | public | AgentEventStream.fail(_:) | `public static func fail(_ error: any Error) -> AsyncThrowingStream<AgentEvent, any Error>` |
+
+### Core/StructuredOutput.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 11 | enum | public | StructuredOutputFormat | `public enum StructuredOutputFormat` |
+| 35 | struct | public | StructuredOutputRequest | `public struct StructuredOutputRequest` |
+| 47 | var | public | StructuredOutputRequest.required | `public var required: Bool` |
+| 56 | struct | public | StructuredOutputResult | `public struct StructuredOutputResult` |
+| 91 | struct | public | StructuredAgentResult | `public struct StructuredAgentResult` |
+| 107 | struct | public | DecodedStructuredAgentResult | `public struct DecodedStructuredAgentResult<Output> where Output : Sendable` |
+| 109 | var | public | DecodedStructuredAgentResult.agentResult | `public let agentResult: AgentResult` |
+| 111 | var | public | DecodedStructuredAgentResult.structuredOutput | `public let structuredOutput: StructuredOutputResult` |
+| 113 | var | public | DecodedStructuredAgentResult.output | `public let output: Output` |
+| 115 | func | public | DecodedStructuredAgentResult.init(agentResult:structuredOutput:output:) | `public init(agentResult: AgentResult, structuredOutput: StructuredOutputResult, output: Output)` |
 
 ### Core/SwarmConfiguration.swift
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
-| 26 | class | public | Swarm.Configuration | `public actor Configuration` |
-| 47 | var | public | Swarm.defaultProvider | `public static var defaultProvider: (any InferenceProvider)? { get async }` |
-| 52 | var | public | Swarm.cloudProvider | `public static var cloudProvider: (any InferenceProvider)? { get async }` |
-| 67 | func | public | Swarm.configure(provider:) | `public static func configure(provider: some InferenceProvider) async` |
-| 76 | func | public | Swarm.configure(cloudProvider:) | `public static func configure(cloudProvider: some InferenceProvider) async` |
-| 81 | func | public | Swarm.reset() | `public static func reset() async` |
+| 44 | var | public | Swarm.defaultProvider | `public static var defaultProvider: (any InferenceProvider)? { get async }` |
+| 49 | var | public | Swarm.webConfiguration | `public static var webConfiguration: WebSearchTool.Configuration? { get async }` |
+| 63 | func | public | Swarm.configure(provider:) | `public static func configure(provider: some InferenceProvider) async` |
+| 74 | func | public | Swarm.configure(web:) | `public static func configure(web configuration: WebSearchTool.Configuration) async` |
+| 79 | func | public | Swarm.reset() | `public static func reset() async` |
 
 ### Core/TokenUsage.swift
 
@@ -1055,9 +1125,24 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 19 | var | public | TokenUsage.outputTokens | `public let outputTokens: Int` |
 | 22 | var | public | TokenUsage.totalTokens | `public var totalTokens: Int { get }` |
 | 30 | func | public | TokenUsage.init(inputTokens:outputTokens:) | `public init(inputTokens: Int, outputTokens: Int)` |
-| 39 | var | public | TokenUsage.description | `public var description: String { get }` |
+| 36 | func | public | TokenUsage.merging(_:) | `public func merging(_ other: TokenUsage) -> TokenUsage` |
+| 51 | var | public | TokenUsage.description | `public var description: String { get }` |
 
 ## 3. Agents
+
+### Core/ToolCallLoopDetector.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 9 | struct | public | ToolCallLoop | `public struct ToolCallLoop` |
+| 11 | var | public | ToolCallLoop.toolNames | `public let toolNames: [String]` |
+| 14 | var | public | ToolCallLoop.repetitions | `public let repetitions: Int` |
+| 17 | func | public | ToolCallLoop.init(toolNames:repetitions:) | `public init(toolNames: [String], repetitions: Int)` |
+| 47 | struct | public | ToolCallLoopDetector | `public struct ToolCallLoopDetector` |
+| 52 | var | public | ToolCallLoopDetector.maxConsecutiveRepeats | `public var maxConsecutiveRepeats: Int` |
+| 57 | func | public | ToolCallLoopDetector.init(maxConsecutiveRepeats:) | `public init(maxConsecutiveRepeats: Int = 3)` |
+| 67 | func | public | ToolCallLoopDetector.observe(_:) | `public mutating func observe(_ calls: [InferenceResponse.ParsedToolCall]) -> ToolCallLoop?` |
+| 86 | func | public | ToolCallLoopDetector.reset() | `public mutating func reset()` |
 
 ### Agents/Agent.swift
 
@@ -1071,24 +1156,29 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 54 | var | public | Agent.inferenceProvider | `public let inferenceProvider: (any InferenceProvider)?` |
 | 55 | var | public | Agent.inputGuardrails | `public let inputGuardrails: [any InputGuardrail]` |
 | 56 | var | public | Agent.outputGuardrails | `public let outputGuardrails: [any OutputGuardrail]` |
-| 57 | var | public | Agent.tracer | `public let tracer: (any Tracer)?` |
+| 57 | var | public | Agent.tracer | `public private(set) var tracer: (any Tracer)?` |
+| 200 | var | public | Agent.metricsCollector | `public private(set) var metricsCollector: MetricsCollector?` |
 | 58 | var | public | Agent.guardrailRunnerConfiguration | `public let guardrailRunnerConfiguration: GuardrailRunnerConfiguration` |
 | 61 | var | public | Agent.handoffs | `public var handoffs: [AnyHandoffConfiguration] { get }` |
 | 80 | func | public | Agent.init(tools:instructions:configuration:memory:inferenceProvider:tracer:inputGuardrails:outputGuardrails:guardrailRunnerConfiguration:handoffs:) | `public init(tools: [any AnyJSONTool] = [], instructions: String = "", configuration: AgentConfiguration = .default, memory: (any Memory)? = nil, inferenceProvider: (any InferenceProvider)? = nil, tracer: (any Tracer)? = nil, inputGuardrails: [any InputGuardrail] = [], outputGuardrails: [any OutputGuardrail] = [], guardrailRunnerConfiguration: GuardrailRunnerConfiguration = .default, handoffs: [AnyHandoffConfiguration] = []) throws` |
 | 111 | func | public | Agent.init(_:tools:instructions:configuration:memory:tracer:inputGuardrails:outputGuardrails:guardrailRunnerConfiguration:handoffs:) | `public init(_ inferenceProvider: any InferenceProvider, tools: [any AnyJSONTool] = [], instructions: String = "", configuration: AgentConfiguration = .default, memory: (any Memory)? = nil, tracer: (any Tracer)? = nil, inputGuardrails: [any InputGuardrail] = [], outputGuardrails: [any OutputGuardrail] = [], guardrailRunnerConfiguration: GuardrailRunnerConfiguration = .default, handoffs: [AnyHandoffConfiguration] = []) throws` |
 | 150 | func | public | Agent.init(tools:instructions:configuration:memory:inferenceProvider:tracer:inputGuardrails:outputGuardrails:guardrailRunnerConfiguration:handoffs:) | `public init(tools: [some Tool] = [], instructions: String = "", configuration: AgentConfiguration = .default, memory: (any Memory)? = nil, inferenceProvider: (any InferenceProvider)? = nil, tracer: (any Tracer)? = nil, inputGuardrails: [any InputGuardrail] = [], outputGuardrails: [any OutputGuardrail] = [], guardrailRunnerConfiguration: GuardrailRunnerConfiguration = .default, handoffs: [AnyHandoffConfiguration] = []) throws` |
 | 203 | func | public | Agent.init(tools:instructions:configuration:memory:inferenceProvider:tracer:inputGuardrails:outputGuardrails:guardrailRunnerConfiguration:handoffAgents:) | `public init(tools: [any AnyJSONTool] = [], instructions: String = "", configuration: AgentConfiguration = .default, memory: (any Memory)? = nil, inferenceProvider: (any InferenceProvider)? = nil, tracer: (any Tracer)? = nil, inputGuardrails: [any InputGuardrail] = [], outputGuardrails: [any OutputGuardrail] = [], guardrailRunnerConfiguration: GuardrailRunnerConfiguration = .default, handoffAgents: [any AgentRuntime]) throws` |
+| 647 | func | public | Agent.withHandoffs(_:) | `public @discardableResult func withHandoffs(_ agents: [any AgentRuntime]) throws -> Agent` |
 | 260 | func | public | Agent.init(_:configuration:memory:inferenceProvider:tracer:inputGuardrails:outputGuardrails:guardrailRunnerConfiguration:handoffs:tools:) | `public init(_ instructions: String, configuration: AgentConfiguration = .default, memory: (any Memory)? = nil, inferenceProvider: (any InferenceProvider)? = nil, tracer: (any Tracer)? = nil, inputGuardrails: [any InputGuardrail] = [], outputGuardrails: [any OutputGuardrail] = [], guardrailRunnerConfiguration: GuardrailRunnerConfiguration = .default, handoffs: [AnyHandoffConfiguration] = [], @ToolBuilder tools: () -> [any AnyJSONTool] = { [] }) throws` |
+| 1130 | func | public | Agent.makeDefaultMemory() | `public static func makeDefaultMemory() throws -> any Memory` _(Integrations: `DefaultAgentMemory`; lean: `SlidingWindowMemory`)_ |
 | 295 | func | public | Agent.run(_:session:observer:) | `public func run(_ input: String, session: (any Session)? = nil, observer: (any AgentObserver)? = nil) async throws -> AgentResult` |
+| 50 | func | public | Agent.runStructured(_:request:session:observer:) | `public func runStructured(_ input: String, request: StructuredOutputRequest, session: (any Session)? = nil, observer: (any AgentObserver)? = nil) async throws -> StructuredAgentResult` |
+| 93 | func | public | Agent.runStructured(_:_:request:session:observer:) | `public func runStructured<Output>(_ type: Output.Type, _ input: String, request: StructuredOutputRequest, session: (any Session)? = nil, observer: (any AgentObserver)? = nil) async throws -> DecodedStructuredAgentResult<Output> where Output : Decodable, Output : Sendable` |
 | 303 | func | public | Agent.cancel() | `public func cancel() async` |
 | 313 | func | public | Agent.stream(_:session:observer:) | `public func stream(_ input: String, session: (any Session)? = nil, observer: (any AgentObserver)? = nil) -> AsyncThrowingStream<AgentEvent, any Error>` |
 | 336 | func | public | Agent.runWithResponse(_:session:observer:) | `public func runWithResponse(_ input: String, session: (any Session)? = nil, observer: (any AgentObserver)? = nil) async throws -> AgentResponse` |
-| 1259 | struct | public | Agent.Builder | `public struct Builder` |
+| 1259 | struct | public | Agent.Builder | `@available(*, deprecated, message: "Use an Agent initializer or withTools(_:). Agent.Builder compatibility will be removed in 0.7.0.") public struct Builder` |
 | 1265 | func | public | Agent.Builder.init() | `public init()` |
-| 1273 | func | public | Agent.Builder.tools(_:) | `public @discardableResult func tools(_ tools: [any AnyJSONTool]) -> Agent.Builder` |
+| 1273 | func | public | Agent.Builder.tools(_:) | `public @discardableResult func tools(_ tools: [any AnyJSONTool]) -> Agent.Builder` (deprecated) |
 | 1283 | func | public | Agent.Builder.tools(_:) | `public @discardableResult func tools(_ tools: [some Tool]) -> Agent.Builder` |
-| 1293 | func | public | Agent.Builder.addTool(_:) | `public @discardableResult func addTool(_ tool: some AnyJSONTool) -> Agent.Builder` |
-| 1303 | func | public | Agent.Builder.addTool(_:) | `public @discardableResult func addTool(_ tool: any AnyJSONTool) -> Agent.Builder` |
+| 1293 | func | public | Agent.Builder.addTool(_:) | `public @discardableResult func addTool(_ tool: some AnyJSONTool) -> Agent.Builder` (deprecated) |
+| 1303 | func | public | Agent.Builder.addTool(_:) | `public @discardableResult func addTool(_ tool: any AnyJSONTool) -> Agent.Builder` (deprecated) |
 | 1313 | func | public | Agent.Builder.addTool(_:) | `public @discardableResult func addTool(_ tool: some Tool) -> Agent.Builder` |
 | 1322 | func | public | Agent.Builder.withBuiltInTools() | `public @discardableResult func withBuiltInTools() -> Agent.Builder` |
 | 1332 | func | public | Agent.Builder.instructions(_:) | `public @discardableResult func instructions(_ instructions: String) -> Agent.Builder` |
@@ -1101,10 +1191,10 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 1402 | func | public | Agent.Builder.outputGuardrails(_:) | `public @discardableResult func outputGuardrails(_ guardrails: [any OutputGuardrail]) -> Agent.Builder` |
 | 1412 | func | public | Agent.Builder.addOutputGuardrail(_:) | `public @discardableResult func addOutputGuardrail(_ guardrail: any OutputGuardrail) -> Agent.Builder` |
 | 1422 | func | public | Agent.Builder.guardrailRunnerConfiguration(_:) | `public @discardableResult func guardrailRunnerConfiguration(_ configuration: GuardrailRunnerConfiguration) -> Agent.Builder` |
-| 1432 | func | public | Agent.Builder.handoffs(_:) | `public @discardableResult func handoffs(_ handoffs: [AnyHandoffConfiguration]) -> Agent.Builder` |
-| 1442 | func | public | Agent.Builder.addHandoff(_:) | `public @discardableResult func addHandoff(_ handoff: AnyHandoffConfiguration) -> Agent.Builder` |
-| 1457 | func | public | Agent.Builder.handoff(to:configure:) | `public @discardableResult func handoff<Target>(to target: Target, configure: (HandoffOptions<Target>) -> HandoffOptions<Target> = { $0 }) -> Agent.Builder where Target : AgentRuntime` |
-| 1476 | func | public | Agent.Builder.handoffs(_:) | `public @discardableResult func handoffs<each Target>(_ targets: repeat each Target) -> Agent.Builder where repeat each Target : AgentRuntime` |
+| 1432 | func | public | Agent.Builder.handoffs(_:) | `public @discardableResult func handoffs(_ handoffs: [AnyHandoffConfiguration]) throws -> Agent.Builder` |
+| 1442 | func | public | Agent.Builder.addHandoff(_:) | `public @discardableResult func addHandoff(_ handoff: AnyHandoffConfiguration) throws -> Agent.Builder` |
+| 1457 | func | public | Agent.Builder.handoff(to:configure:) | `public @discardableResult func handoff<Target>(to target: Target, configure: (HandoffOptions<Target>) -> HandoffOptions<Target> = { $0 }) throws -> Agent.Builder where Target : AgentRuntime` |
+| 1476 | func | public | Agent.Builder.handoffs(_:) | `public @discardableResult func handoffs<each Target>(_ targets: repeat each Target) throws -> Agent.Builder where repeat each Target : AgentRuntime` |
 | 1485 | func | public | Agent.Builder.build() | `public func build() throws -> Agent` |
 | 1542 | func | public | Agent.init(name:instructions:tools:inferenceProvider:memory:tracer:configuration:inputGuardrails:outputGuardrails:guardrailRunnerConfiguration:handoffs:) | `public init(name: String, instructions: String = "", tools: [any AnyJSONTool] = [], inferenceProvider: (any InferenceProvider)? = nil, memory: (any Memory)? = nil, tracer: (any Tracer)? = nil, configuration: AgentConfiguration = .default, inputGuardrails: [any InputGuardrail] = [], outputGuardrails: [any OutputGuardrail] = [], guardrailRunnerConfiguration: GuardrailRunnerConfiguration = .default, handoffs: [AnyHandoffConfiguration] = []) throws` |
 | 1604 | func | public | Agent.init(name:instructions:tools:inferenceProvider:memory:tracer:configuration:inputGuardrails:outputGuardrails:guardrailRunnerConfiguration:handoffAgents:) | `public init(name: String, instructions: String = "", tools: [any AnyJSONTool] = [], inferenceProvider: (any InferenceProvider)? = nil, memory: (any Memory)? = nil, tracer: (any Tracer)? = nil, configuration: AgentConfiguration = .default, inputGuardrails: [any InputGuardrail] = [], outputGuardrails: [any OutputGuardrail] = [], guardrailRunnerConfiguration: GuardrailRunnerConfiguration = .default, handoffAgents: [any AgentRuntime]) throws` |
@@ -1161,8 +1251,9 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 10 | var | public | ToolArguments.raw | `public let raw: [String : SendableValue]` |
 | 11 | var | public | ToolArguments.toolName | `public let toolName: String` |
 | 13 | func | public | ToolArguments.init(_:toolName:) | `public init(_ arguments: [String : SendableValue], toolName: String = "tool")` |
-| 19 | func | public | ToolArguments.require(_:as:) | `public func require<T>(_ key: String, as type: T.Type = T.self) throws -> T` |
-| 45 | func | public | ToolArguments.optional(_:as:) | `public func optional<T>(_ key: String, as type: T.Type = T.self) -> T?` |
+| 19 | func | public | ToolArguments.require(_:as:) | `public func require<T: ToolArgumentValue>(_ key: String, as type: T.Type = T.self) throws -> T` |
+| 45 | func | public | ToolArguments.optional(_:as:) | `public func optional<T: ToolArgumentValue>(_ key: String, as type: T.Type = T.self) -> T?` |
+| 910 | func | public | ToolArguments.optionalValue(_:as:) | `public func optionalValue<T: ToolArgumentValue>(_ key: String, as type: T.Type = T.self) throws -> T?` |
 | 57 | func | public | ToolArguments.string(_:default:) | `public func string(_ key: String, default defaultValue: String = "") -> String` |
 | 62 | func | public | ToolArguments.int(_:default:) | `public func int(_ key: String, default defaultValue: Int = 0) -> Int` |
 | 96 | struct | public | FunctionTool | `public struct FunctionTool` |
@@ -1176,12 +1267,25 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
-| 73 | class | public | ParallelToolExecutor | `public actor ParallelToolExecutor` |
-| 79 | func | public | ParallelToolExecutor.init() | `public init()` |
-| 122 | func | public | ParallelToolExecutor.executeInParallel(_:using:agent:context:) | `public func executeInParallel(_ calls: [ToolCall], using registry: ToolRegistry, agent: any AgentRuntime, context: AgentContext?) async throws -> [ToolExecutionResult]` |
-| 237 | func | public | ParallelToolExecutor.executeInParallel(_:using:agent:context:errorStrategy:) | `public func executeInParallel(_ calls: [ToolCall], using registry: ToolRegistry, agent: any AgentRuntime, context: AgentContext?, errorStrategy: ParallelExecutionErrorStrategy) async throws -> [ToolExecutionResult]` |
-| 365 | func | public | ParallelToolExecutor.executeAllCapturingErrors(_:using:agent:context:) | `public func executeAllCapturingErrors(_ calls: [ToolCall], using registry: ToolRegistry, agent: any AgentRuntime, context: AgentContext? = nil) async throws -> [ToolExecutionResult]` |
-| 393 | func | public | ParallelToolExecutor.executeAllOrFail(_:using:agent:context:) | `public func executeAllOrFail(_ calls: [ToolCall], using registry: ToolRegistry, agent: any AgentRuntime, context: AgentContext? = nil) async throws -> [ToolExecutionResult]` |
+| 78 | class | public | ParallelToolExecutor | `public actor ParallelToolExecutor` |
+| 84 | func | public | ParallelToolExecutor.init() | `public init()` |
+| 136 | func | public | ParallelToolExecutor.executeInParallel(_:using:agent:context:) | `public func executeInParallel(_ calls: [ToolCall], using registry: ToolRegistry, agent: any AgentRuntime, context: AgentContext?) async throws -> [ToolExecutionResult]` |
+| 210 | func | public | ParallelToolExecutor.executeInParallel(_:using:agent:context:errorStrategy:) | `public func executeInParallel(_ calls: [ToolCall], using registry: ToolRegistry, agent: any AgentRuntime, context: AgentContext?, errorStrategy: ParallelExecutionErrorStrategy) async throws -> [ToolExecutionResult]` |
+| 404 | func | public | ParallelToolExecutor.executeAllCapturingErrors(_:using:agent:context:) | `public func executeAllCapturingErrors(_ calls: [ToolCall], using registry: ToolRegistry, agent: any AgentRuntime, context: AgentContext? = nil) async throws -> [ToolExecutionResult]` |
+| 432 | func | public | ParallelToolExecutor.executeAllOrFail(_:using:agent:context:) | `public func executeAllOrFail(_ calls: [ToolCall], using registry: ToolRegistry, agent: any AgentRuntime, context: AgentContext? = nil) async throws -> [ToolExecutionResult]` |
+
+### Tools/ToolExecutionSemantics.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 4 | enum | public | ToolSideEffectLevel | `public enum ToolSideEffectLevel` |
+| 12 | enum | public | ToolRetryPolicy | `public enum ToolRetryPolicy` |
+| 20 | enum | public | ToolApprovalRequirement | `public enum ToolApprovalRequirement` |
+| 27 | enum | public | ToolResultDurability | `public enum ToolResultDurability` |
+| 35 | struct | public | ToolExecutionSemantics | `public struct ToolExecutionSemantics` |
+| 53 | var | public | ToolExecutionSemantics.automatic | `public static let automatic: ToolExecutionSemantics` |
+| 60 | struct | public | ToolExecutionSemantics.RuntimePolicy | `public struct RuntimePolicy` |
+| 74 | func | public | ToolExecutionSemantics.runtimePolicy() | `public func runtimePolicy() -> RuntimePolicy` |
 
 ### Tools/SemanticCompactorTool.swift
 
@@ -1199,6 +1303,8 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
+| 755 | protocol | public | ToolArgumentValue | `public protocol ToolArgumentValue : Sendable` _(Open lattice: built-in `String`, `Int`, `Double`, `Bool`; custom `Sendable` types conform via `extract(from:)`.)_ |
+| 760 | func | public | ToolArgumentValue.extract(from:) | `public static func extract(from value: SendableValue) -> Self?` |
 | 32 | protocol | public | AnyJSONTool | `public protocol AnyJSONTool : Sendable` |
 | 34 | var | public | AnyJSONTool.name | `public var name: String { get }` |
 | 37 | var | public | AnyJSONTool.description | `public var description: String { get }` |
@@ -1322,6 +1428,8 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 290 | func | public | ToolBuilder.buildExpression(_:) | `public static func buildExpression(_ expression: any AnyJSONTool) -> [any AnyJSONTool]` |
 | 295 | func | public | ToolBuilder.buildExpression(_:) | `public static func buildExpression<T>(_ expression: T) -> [any AnyJSONTool] where T : Tool` |
 | 300 | func | public | ToolBuilder.buildExpression(_:) | `public static func buildExpression(_ expression: [any AnyJSONTool]) -> [any AnyJSONTool]` |
+| 305 | func | public | ToolBuilder.buildExpression(_:) | `public static func buildExpression(_ expression: FoundationModelsNativeTool) -> ToolCollection` _(Availability: macOS 26.0+, iOS 26.0+, visionOS 26.0+; Requires FoundationModels)_ |
+| 315 | func | public | ToolBuilder.buildExpression(_:) | `public static func buildExpression<T>(_ expression: T) -> ToolCollection where T : FoundationModels.Tool` _(Availability: macOS 26.0+, iOS 26.0+, visionOS 26.0+; Requires FoundationModels)_ |
 | 305 | func | public | ToolBuilder.buildLimitedAvailability(_:) | `public static func buildLimitedAvailability(_ component: [any AnyJSONTool]) -> [any AnyJSONTool]` |
 | 312 | typealias | public | ToolArrayBuilder | `public typealias ToolArrayBuilder = ToolBuilder` _(Availability: * (deprecated); renamed to ToolBuilder)_ |
 
@@ -1363,6 +1471,11 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 22 | struct | public | WebSearchTool | `public struct WebSearchTool` |
 | 57 | func | public | WebSearchTool.init(apiKey:) | `public init(apiKey: String)` |
 | 68 | func | public | WebSearchTool.execute() | `public func execute() async throws -> String` |
+| — | var | public | WebSearchTool.Configuration.apiKeyReference | `public var apiKeyReference: SecretReference?` |
+| — | func | public | WebSearchTool.Configuration.resolveAPIKey(using:) | `public func resolveAPIKey(using store: (any SecretStore)?) async throws -> String?` |
+| — | func | public | WebSearchTool.init(configuration:secretStore:) | `public init(configuration: WebSearchTool.Configuration, secretStore: any SecretStore)` |
+| 408 | var | public | WebSearchTool.Configuration.description | `public var description: String { get }` |
+| 413 | var | public | WebSearchTool.Configuration.debugDescription | `public var debugDescription: String { get }` |
 
 ### Tools/ZoniSearchTool.swift
 
@@ -1385,28 +1498,23 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
-| 47 | protocol | public | Memory | `public protocol Memory : Actor` |
-| 49 | var | public | Memory.count | `public var count: Int { get async }` |
-| 55 | var | public | Memory.isEmpty | `public var isEmpty: Bool { get async }` |
-| 60 | func | public | Memory.add(_:) | `public func add(_ message: MemoryMessage) async` |
-| 72 | func | public | Memory.context(for:tokenLimit:) | `public func context(for query: String, tokenLimit: Int) async -> String` |
-| 77 | func | public | Memory.allMessages() | `public func allMessages() async -> [MemoryMessage]` |
-| 80 | func | public | Memory.clear() | `public func clear() async` |
-| 96 | func | public | MemoryMessage.formatContext(_:tokenLimit:tokenEstimator:) | `public static func formatContext(_ messages: [MemoryMessage], tokenLimit: Int, tokenEstimator: any TokenEstimator = CharacterBasedTokenEstimator.shared) -> String` |
-| 128 | func | public | MemoryMessage.formatContext(_:tokenLimit:separator:tokenEstimator:) | `public static func formatContext(_ messages: [MemoryMessage], tokenLimit: Int, separator: String, tokenEstimator: any TokenEstimator = CharacterBasedTokenEstimator.shared) -> String` |
-| 169 | class | public | AnyMemory | `public actor AnyMemory` |
-| 172 | var | public | AnyMemory.count | `public var count: Int { get async }` |
-| 178 | var | public | AnyMemory.isEmpty | `public var isEmpty: Bool { get async }` |
-| 187 | func | public | AnyMemory.init(_:) | `public init(_ memory: some Memory)` |
-| 196 | func | public | AnyMemory.add(_:) | `public func add(_ message: MemoryMessage) async` |
-| 200 | func | public | AnyMemory.context(for:tokenLimit:) | `public func context(for query: String, tokenLimit: Int) async -> String` |
-| 204 | func | public | AnyMemory.allMessages() | `public func allMessages() async -> [MemoryMessage]` |
-| 208 | func | public | AnyMemory.clear() | `public func clear() async` |
-| 229 | func | public | AnyMemory.conversation(maxMessages:) | `public static func conversation(maxMessages: Int = 100) -> AnyMemory` |
-| 237 | func | public | AnyMemory.slidingWindow(maxTokens:) | `public static func slidingWindow(maxTokens: Int = 4000) -> AnyMemory` |
-| 248 | func | public | AnyMemory.vector(embeddingProvider:similarityThreshold:maxResults:) | `public static func vector(embeddingProvider: any EmbeddingProvider, similarityThreshold: Float = 0.7, maxResults: Int = 10) -> AnyMemory` |
-| 270 | func | public | AnyMemory.persistent(backend:conversationId:maxMessages:) | `public static func persistent(backend: any PersistentMemoryBackend = InMemoryBackend(), conversationId: String = UUID().uuidString, maxMessages: Int = 0) -> AnyMemory` |
-
+| 101 | protocol | public | Memory | `public protocol Memory : Actor` |
+| 110 | var | public | Memory.count | `public var count: Int { get async }` |
+| 120 | var | public | Memory.isEmpty | `public var isEmpty: Bool { get async }` |
+| 132 | func | public | Memory.add(_:) | `public func add(_ message: MemoryMessage) async` |
+| 158 | func | public | Memory.context(for:tokenLimit:) | `public func context(for query: String, tokenLimit: Int) async -> String` |
+| 169 | func | public | Memory.allMessages() | `public func allMessages() async -> [MemoryMessage]` |
+| 176 | func | public | Memory.clear() | `public func clear() async` |
+| 188 | func | public | Memory.beginMemorySession() | `public func beginMemorySession() async` |
+| 196 | func | public | Memory.endMemorySession() | `public func endMemorySession() async` |
+| 205 | func | public | Memory.context(for:) | `public func context(for query: MemoryQuery) async -> String` |
+| 212 | func | public | Memory.importSessionHistory(_:) | `public func importSessionHistory(_ messages: [MemoryMessage]) async` |
+| 219 | func | public | Memory.shouldImportSessionHistory() | `public func shouldImportSessionHistory() async -> Bool` |
+| 226 | var | public | Memory.trackedSessionMemory | `public nonisolated var trackedSessionMemory: (any Memory)? { get }` |
+| 231 | var | public | Memory.allowsAutomaticSessionSeeding | `public nonisolated var allowsAutomaticSessionSeeding: Bool { get }` |
+| 238 | var | public | Memory.memoryPromptMetadata | `public nonisolated var memoryPromptMetadata: MemoryPromptMetadata? { get }` |
+| 274 | func | public | MemoryMessage.formatContext(_:tokenLimit:tokenEstimator:) | `public static func formatContext(_ messages: [MemoryMessage], tokenLimit: Int, tokenEstimator: any TokenEstimator = CharacterBasedTokenEstimator.shared) -> String` |
+| 318 | func | public | MemoryMessage.formatContext(_:tokenLimit:separator:tokenEstimator:) | `public static func formatContext(_ messages: [MemoryMessage], tokenLimit: Int, separator: String, tokenEstimator: any TokenEstimator = CharacterBasedTokenEstimator.shared) -> String` |
 ### Memory/Backends/InMemoryBackend.swift
 
 | Line | Kind | Access | Name | Signature |
@@ -1498,6 +1606,33 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 174 | func | public | EmbeddingUtils.euclideanDistance(_:_:) | `public static func euclideanDistance(_ embedding1: [Float], _ embedding2: [Float]) -> Float` |
 | 190 | func | public | EmbeddingUtils.normalize(_:) | `public static func normalize(_ vector: [Float]) -> [Float]` |
 
+### Memory/ContextCoreEmbeddingAdapter.swift (Integrations)
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| — | struct | public | ContextCoreEmbeddingAdapter | Bridges Swarm `EmbeddingProvider` into ContextCore |
+| — | enum | public | SemanticEmbeddingAvailability | `ensureModelAvailable()`, `isAvailable`, `reprobe()`, `isKnownDegradedDefault(for:)` |
+| — | struct | public | EmbeddingModelDeliveryConfiguration | Download URL, pinned SHA-256, cache directory |
+| — | enum | public | EmbeddingModelCatalog | Publishing-target URL + `expectedSHA256` |
+| — | var | public | ContextCoreMemoryConfiguration.downloadsEmbeddingModelAutomatically | Default `false`; failed auto-download does not block session start |
+| — | var | public | ContextCoreMemoryConfiguration.embeddingModelDelivery | Delivery config used when auto-download is on |
+
+### Memory/FileSession.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 34 | class | public | FileSession | `public actor FileSession` |
+| 38 | var | public | FileSession.sessionId | `public nonisolated let sessionId: String` |
+| 41 | var | public | FileSession.directory | `public nonisolated let directory: URL` |
+| 48 | var | public | FileSession.itemCount | `public var itemCount: Int { get }` |
+| 61 | var | public | FileSession.isEmpty | `public var isEmpty: Bool { get }` |
+| 77 | func | public | FileSession.init(sessionId:directory:) | `public init(sessionId: String = UUID().uuidString, directory: URL)` |
+| 83 | func | public | FileSession.getItemCount() | `public func getItemCount() async throws -> Int` |
+| 91 | func | public | FileSession.getItems(limit:) | `public func getItems(limit: Int?) async throws -> [MemoryMessage]` |
+| 104 | func | public | FileSession.addItems(_:) | `public func addItems(_ newItems: [MemoryMessage]) async throws` |
+| 111 | func | public | FileSession.popItem() | `public func popItem() async throws -> MemoryMessage?` |
+| 122 | func | public | FileSession.clearSession() | `public func clearSession() async throws` |
+
 ### Memory/HybridMemory.swift
 
 | Line | Kind | Access | Name | Signature |
@@ -1561,70 +1696,6 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 115 | func | public | InferenceProviderSummarizer.conversationSummarizer(provider:) | `public static func conversationSummarizer(provider: any InferenceProvider) -> InferenceProviderSummarizer` |
 | 137 | func | public | InferenceProviderSummarizer.reasoningSummarizer(provider:) | `public static func reasoningSummarizer(provider: any InferenceProvider) -> InferenceProviderSummarizer` |
 
-### Memory/MemoryBuilder.swift
-
-| Line | Kind | Access | Name | Signature |
-|------|------|--------|------|-----------|
-| 26 | @resultBuilder | public | MemoryBuilder | `public @resultBuilder struct MemoryBuilder` |
-| 28 | func | public | MemoryBuilder.buildBlock(_:) | `public static func buildBlock(_ components: MemoryComponent...) -> [MemoryComponent]` |
-| 33 | func | public | MemoryBuilder.buildBlock(_:) | `public static func buildBlock(_ components: [MemoryComponent]...) -> [MemoryComponent]` |
-| 38 | func | public | MemoryBuilder.buildBlock() | `public static func buildBlock() -> [MemoryComponent]` |
-| 43 | func | public | MemoryBuilder.buildOptional(_:) | `public static func buildOptional(_ component: [MemoryComponent]?) -> [MemoryComponent]` |
-| 48 | func | public | MemoryBuilder.buildEither(first:) | `public static func buildEither(first component: [MemoryComponent]) -> [MemoryComponent]` |
-| 53 | func | public | MemoryBuilder.buildEither(second:) | `public static func buildEither(second component: [MemoryComponent]) -> [MemoryComponent]` |
-| 58 | func | public | MemoryBuilder.buildArray(_:) | `public static func buildArray(_ components: [[MemoryComponent]]) -> [MemoryComponent]` |
-| 63 | func | public | MemoryBuilder.buildExpression(_:) | `public static func buildExpression(_ expression: any Memory) -> [MemoryComponent]` |
-| 68 | func | public | MemoryBuilder.buildExpression(_:) | `public static func buildExpression(_ expression: MemoryComponent) -> [MemoryComponent]` |
-| 73 | func | public | MemoryBuilder.buildFinalResult(_:) | `public static func buildFinalResult(_ component: [MemoryComponent]) -> [MemoryComponent]` |
-| 81 | struct | public | MemoryComponent | `public struct MemoryComponent` |
-| 83 | var | public | MemoryComponent.memory | `public let memory: any Memory` |
-| 86 | var | public | MemoryComponent.priority | `public let priority: MemoryPriority` |
-| 89 | var | public | MemoryComponent.identifier | `public let identifier: String?` |
-| 97 | func | public | MemoryComponent.init(memory:priority:identifier:) | `public init(memory: any Memory, priority: MemoryPriority = .normal, identifier: String? = nil)` |
-| 108 | func | public | MemoryComponent.priority(_:) | `public func priority(_ priority: MemoryPriority) -> MemoryComponent` |
-| 113 | func | public | MemoryComponent.identified(by:) | `public func identified(by identifier: String) -> MemoryComponent` |
-| 121 | enum | public | MemoryPriority | `public enum MemoryPriority` |
-| 124 | func | public | MemoryPriority.<(_:_:) | `public static func < (lhs: MemoryPriority, rhs: MemoryPriority) -> Bool` |
-| 128 | case | public | MemoryPriority.low | `public case low` |
-| 129 | case | public | MemoryPriority.normal | `public case normal` |
-| 130 | case | public | MemoryPriority.high | `public case high` |
-| 136 | enum | public | RetrievalStrategy | `public enum RetrievalStrategy` |
-| 138 | case | public | RetrievalStrategy.recency | `public case recency` |
-| 141 | case | public | RetrievalStrategy.relevance | `public case relevance` |
-| 144 | case | public | RetrievalStrategy.hybrid(recencyWeight:relevanceWeight:) | `public case hybrid(recencyWeight: Double, relevanceWeight: Double)` |
-| 147 | case | public | RetrievalStrategy.custom(_:) | `public case custom(([MemoryMessage], String) async -> [MemoryMessage])` |
-| 153 | enum | public | MemoryMergeStrategy | `public enum MemoryMergeStrategy` |
-| 155 | case | public | MemoryMergeStrategy.concatenate | `public case concatenate` |
-| 158 | case | public | MemoryMergeStrategy.interleave | `public case interleave` |
-| 161 | case | public | MemoryMergeStrategy.deduplicate | `public case deduplicate` |
-| 164 | case | public | MemoryMergeStrategy.primaryOnly | `public case primaryOnly` |
-| 167 | case | public | MemoryMergeStrategy.custom(_:) | `public case custom(([[MemoryMessage]]) -> [MemoryMessage])` |
-| 193 | class | public | CompositeMemory | `public actor CompositeMemory` |
-| 197 | var | public | CompositeMemory.componentCount | `public nonisolated var componentCount: Int { get }` |
-| 201 | var | public | CompositeMemory.count | `public var count: Int { get async }` |
-| 211 | var | public | CompositeMemory.isEmpty | `public var isEmpty: Bool { get async }` |
-| 225 | func | public | CompositeMemory.init(tokenEstimator:_:) | `public init(tokenEstimator: any TokenEstimator = CharacterBasedTokenEstimator.shared, @MemoryBuilder _ content: () -> [MemoryComponent])` |
-| 242 | func | public | CompositeMemory.withRetrievalStrategy(_:) | `public nonisolated func withRetrievalStrategy(_ strategy: RetrievalStrategy) -> CompositeMemory` |
-| 255 | func | public | CompositeMemory.withMergeStrategy(_:) | `public nonisolated func withMergeStrategy(_ strategy: MemoryMergeStrategy) -> CompositeMemory` |
-| 268 | func | public | CompositeMemory.withTokenEstimator(_:) | `public nonisolated func withTokenEstimator(_ estimator: any TokenEstimator) -> CompositeMemory` |
-| 279 | func | public | CompositeMemory.add(_:) | `public func add(_ message: MemoryMessage) async` |
-| 285 | func | public | CompositeMemory.context(for:tokenLimit:) | `public func context(for query: String, tokenLimit: Int) async -> String` |
-| 290 | func | public | CompositeMemory.allMessages() | `public func allMessages() async -> [MemoryMessage]` |
-| 301 | func | public | CompositeMemory.clear() | `public func clear() async` |
-| 314 | func | public | CompositeMemory.store(_:) | `public func store(_ message: MemoryMessage) async` |
-| 322 | func | public | CompositeMemory.retrieve(limit:) | `public func retrieve(limit: Int) async -> [MemoryMessage]` |
-| 331 | func | public | CompositeMemory.buildContext(maxTokens:) | `public func buildContext(maxTokens: Int) async -> String` |
-| 466 | func | public | ConversationMemory.withSummarization(after:) | `public nonisolated func withSummarization(after _: Int) -> MemoryComponent` |
-| 476 | func | public | ConversationMemory.withTokenLimit(_:) | `public nonisolated func withTokenLimit(_: Int) -> MemoryComponent` |
-| 484 | func | public | ConversationMemory.priority(_:) | `public nonisolated func priority(_ priority: MemoryPriority) -> MemoryComponent` |
-| 496 | func | public | SlidingWindowMemory.withOverlapSize(_:) | `public nonisolated func withOverlapSize(_: Int) -> MemoryComponent` |
-| 504 | func | public | SlidingWindowMemory.priority(_:) | `public nonisolated func priority(_ priority: MemoryPriority) -> MemoryComponent` |
-| 512 | protocol | public | VectorMemoryConfigurable | `public protocol VectorMemoryConfigurable : Memory` |
-| 514 | func | public | VectorMemoryConfigurable.withSimilarityThreshold(_:) | `public func withSimilarityThreshold(_ threshold: Double) -> MemoryComponent` |
-| 517 | func | public | VectorMemoryConfigurable.withMaxResults(_:) | `public func withMaxResults(_ max: Int) -> MemoryComponent` |
-| 524 | func | public | VectorMemoryConfigurable.withSimilarityThreshold(_:) | `public nonisolated func withSimilarityThreshold(_: Double) -> MemoryComponent` |
-| 529 | func | public | VectorMemoryConfigurable.withMaxResults(_:) | `public nonisolated func withMaxResults(_: Int) -> MemoryComponent` |
-
 ### Memory/MemoryMessage.swift
 
 | Line | Kind | Access | Name | Signature |
@@ -1655,18 +1726,38 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 9 | enum | public | MemoryPriorityHint | `public enum MemoryPriorityHint` |
 | 10 | case | public | MemoryPriorityHint.primary | `public case primary` |
 | 11 | case | public | MemoryPriorityHint.secondary | `public case secondary` |
-| 18 | protocol | public | MemoryPromptDescriptor | `public protocol MemoryPromptDescriptor : Sendable` |
-| 20 | var | public | MemoryPromptDescriptor.memoryPromptTitle | `public var memoryPromptTitle: String { get }` |
-| 23 | var | public | MemoryPromptDescriptor.memoryPromptGuidance | `public var memoryPromptGuidance: String? { get }` |
-| 26 | var | public | MemoryPromptDescriptor.memoryPriority | `public var memoryPriority: MemoryPriorityHint { get }` |
+| 19 | struct | public | MemoryPromptMetadata | `public struct MemoryPromptMetadata: Sendable` |
+| 21 | var | public | MemoryPromptMetadata.title | `public var title: String` |
+| 24 | var | public | MemoryPromptMetadata.guidance | `public var guidance: String?` |
+| 27 | var | public | MemoryPromptMetadata.priority | `public var priority: MemoryPriorityHint` |
+| 29 | init | public | MemoryPromptMetadata.init(title:guidance:priority:) | `public init(title: String, guidance: String?, priority: MemoryPriorityHint)` |
+| 47 | protocol | public | MemoryPromptDescriptor | `public protocol MemoryPromptDescriptor : Sendable` _(Availability: * (deprecated); Return MemoryPromptMetadata from your Memory conformance's memoryPromptMetadata instead.)_ |
+| 49 | var | public | MemoryPromptDescriptor.memoryPromptTitle | `public var memoryPromptTitle: String { get }` |
+| 52 | var | public | MemoryPromptDescriptor.memoryPromptGuidance | `public var memoryPromptGuidance: String? { get }` |
+| 55 | var | public | MemoryPromptDescriptor.memoryPriority | `public var memoryPriority: MemoryPriorityHint { get }` |
+
+`MemoryPromptDescriptor` remains a source-compatibility marker. The constrained
+`Memory where Self: MemoryPromptDescriptor` extension bridges its members into
+`Memory.memoryPromptMetadata`, preserving prompt labels for existing conformers.
+
+### Memory/MemoryRetrievalPolicy.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 42 | protocol | public | MemoryRetrievalPolicyAware | `public protocol MemoryRetrievalPolicyAware : Memory` _(Availability: * (deprecated); Implement context(for: MemoryQuery) on your Memory conformance instead.)_ |
+| 44 | func | public | MemoryRetrievalPolicyAware.context(for:) | `public func context(for query: MemoryQuery) async -> String` |
+| 61 | protocol | public | MemorySessionImportPolicy | `public protocol MemorySessionImportPolicy : Sendable` _(Availability: * (deprecated); Implement allowsAutomaticSessionSeeding on your Memory conformance instead.)_ |
+| 63 | var | public | MemorySessionImportPolicy.allowsAutomaticSessionSeeding | `public var allowsAutomaticSessionSeeding: Bool { get }` |
 
 ### Memory/MemorySessionLifecycle.swift
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
-| 7 | protocol | public | MemorySessionLifecycle | `public protocol MemorySessionLifecycle : Memory` |
-| 9 | func | public | MemorySessionLifecycle.beginMemorySession() | `public func beginMemorySession() async` |
-| 12 | func | public | MemorySessionLifecycle.endMemorySession() | `public func endMemorySession() async` |
+| 9 | protocol | public | MemorySessionLifecycle | `public protocol MemorySessionLifecycle : Memory` _(Availability: * (deprecated); Implement beginMemorySession() and endMemorySession() on your Memory conformance instead.)_ |
+| 11 | func | public | MemorySessionLifecycle.beginMemorySession() | `public func beginMemorySession() async` |
+| 14 | func | public | MemorySessionLifecycle.endMemorySession() | `public func endMemorySession() async` |
+| 24 | protocol | public | MemorySessionReplayAware | `public protocol MemorySessionReplayAware : Memory` _(Availability: * (deprecated); Implement importSessionHistory(_:) on your Memory conformance instead.)_ |
+| 26 | func | public | MemorySessionReplayAware.importSessionHistory(_:) | `public func importSessionHistory(_ messages: [MemoryMessage]) async` |
 
 ### Memory/PersistentMemory.swift
 
@@ -1753,6 +1844,24 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 191 | func | public | Session.addItem(_:) | `public func addItem(_ item: MemoryMessage) async throws` |
 | 201 | func | public | Session.getAllItems() | `public func getAllItems() async throws -> [MemoryMessage]` |
 | 208 | func | public | Session.getItemCount() | `public func getItemCount() async throws -> Int` |
+
+### Memory/SessionSnapshot.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 22 | struct | public | SessionSnapshot | `public struct SessionSnapshot` |
+| 24 | var | public | SessionSnapshot.currentSchemaVersion | `public static let currentSchemaVersion: Int` |
+| 27 | var | public | SessionSnapshot.schemaVersion | `public let schemaVersion: Int` |
+| 30 | var | public | SessionSnapshot.sessionId | `public let sessionId: String` |
+| 33 | var | public | SessionSnapshot.exportedAt | `public let exportedAt: Date` |
+| 36 | var | public | SessionSnapshot.items | `public let items: [MemoryMessage]` |
+| 45 | func | public | SessionSnapshot.init(sessionId:items:exportedAt:schemaVersion:) | `public init(sessionId: String, items: [MemoryMessage], exportedAt: Date = Date(), schemaVersion: Int = SessionSnapshot.currentSchemaVersion)` |
+| 58 | func | public | SessionSnapshot.encoded() | `public func encoded() throws -> Data` |
+| 70 | func | public | SessionSnapshot.init(encoded:) | `public init(encoded data: Data) throws` |
+| 87 | func | public | Session.snapshot() | `public func snapshot() async throws -> SessionSnapshot` |
+| 92 | func | public | Session.snapshotData() | `public func snapshotData() async throws -> Data` |
+| 101 | func | public | Session.restore(from:) | `public func restore(from snapshot: SessionSnapshot) async throws` |
+| 116 | func | public | Session.restore(from:) | `public func restore(from data: Data) async throws` |
 
 ### Memory/SlidingWindowMemory.swift
 
@@ -1948,10 +2057,10 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 |------|------|--------|------|-----------|
 | 11 | enum | public | GuardrailError | `public enum GuardrailError` |
 | 14 | var | public | GuardrailError.errorDescription | `public var errorDescription: String? { get }` |
-| 30 | case | public | GuardrailError.inputTripwireTriggered(guardrailName:message:outputInfo:) | `public case inputTripwireTriggered(guardrailName: String, message: String?, outputInfo: SendableValue?)` |
-| 37 | case | public | GuardrailError.outputTripwireTriggered(guardrailName:agentName:message:outputInfo:) | `public case outputTripwireTriggered(guardrailName: String, agentName: String, message: String?, outputInfo: SendableValue?)` |
-| 45 | case | public | GuardrailError.toolInputTripwireTriggered(guardrailName:toolName:message:outputInfo:) | `public case toolInputTripwireTriggered(guardrailName: String, toolName: String, message: String?, outputInfo: SendableValue?)` |
-| 53 | case | public | GuardrailError.toolOutputTripwireTriggered(guardrailName:toolName:message:outputInfo:) | `public case toolOutputTripwireTriggered(guardrailName: String, toolName: String, message: String?, outputInfo: SendableValue?)` |
+| 30 | case | public | GuardrailError.inputTripwireTriggered(guardrailName:message:outputInfo:) | `public case inputTripwireTriggered(guardrailName: String, message: String, outputInfo: SendableValue?)` |
+| 37 | case | public | GuardrailError.outputTripwireTriggered(guardrailName:agentName:message:outputInfo:) | `public case outputTripwireTriggered(guardrailName: String, agentName: String, message: String, outputInfo: SendableValue?)` |
+| 45 | case | public | GuardrailError.toolInputTripwireTriggered(guardrailName:toolName:message:outputInfo:) | `public case toolInputTripwireTriggered(guardrailName: String, toolName: String, message: String, outputInfo: SendableValue?)` |
+| 53 | case | public | GuardrailError.toolOutputTripwireTriggered(guardrailName:toolName:message:outputInfo:) | `public case toolOutputTripwireTriggered(guardrailName: String, toolName: String, message: String, outputInfo: SendableValue?)` |
 | 61 | case | public | GuardrailError.executionFailed(guardrailName:underlyingError:) | `public case executionFailed(guardrailName: String, underlyingError: String)` |
 | 67 | var | public | GuardrailError.debugDescription | `public var debugDescription: String { get }` |
 
@@ -1959,15 +2068,15 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
-| 35 | struct | public | GuardrailResult | `public struct GuardrailResult` |
-| 38 | var | public | GuardrailResult.tripwireTriggered | `public let tripwireTriggered: Bool` |
-| 53 | var | public | GuardrailResult.outputInfo | `public let outputInfo: SendableValue?` |
-| 56 | var | public | GuardrailResult.message | `public let message: String?` |
-| 74 | var | public | GuardrailResult.metadata | `public let metadata: [String : SendableValue]` |
-| 85 | func | public | GuardrailResult.init(tripwireTriggered:outputInfo:message:metadata:) | `public init(tripwireTriggered: Bool, outputInfo: SendableValue? = nil, message: String? = nil, metadata: [String : SendableValue] = [:])` |
-| 106 | func | public | GuardrailResult.passed(message:outputInfo:metadata:) | `public static func passed(message: String? = nil, outputInfo: SendableValue? = nil, metadata: [String : SendableValue] = [:]) -> GuardrailResult` |
-| 126 | func | public | GuardrailResult.tripwire(message:outputInfo:metadata:) | `public static func tripwire(message: String, outputInfo: SendableValue? = nil, metadata: [String : SendableValue] = [:]) -> GuardrailResult` |
-| 143 | var | public | GuardrailResult.debugDescription | `public var debugDescription: String { get }` |
+| 45 | enum | public | GuardrailResult | `public enum GuardrailResult` |
+| 52 | case | public | GuardrailResult.passed | `case passed(message: String? = nil, outputInfo: SendableValue? = nil, metadata: [String : SendableValue] = [:])` |
+| 64 | case | public | GuardrailResult.tripwire | `case tripwire(message: String, outputInfo: SendableValue? = nil, metadata: [String : SendableValue] = [:])` |
+| 71 | var | public | GuardrailResult.tripwireTriggered | `public var tripwireTriggered: Bool { get }` |
+| 81 | var | public | GuardrailResult.outputInfo | `public var outputInfo: SendableValue? { get }` |
+| 92 | var | public | GuardrailResult.message | `public var message: String? { get }` |
+| 102 | var | public | GuardrailResult.metadata | `public var metadata: [String : SendableValue] { get }` |
+| 116 | func | public | GuardrailResult.init(tripwireTriggered:outputInfo:message:metadata:) | `public init(tripwireTriggered: Bool, outputInfo: SendableValue? = nil, message: String? = nil, metadata: [String : SendableValue] = [:])` |
+| 140 | var | public | GuardrailResult.debugDescription | `public var debugDescription: String { get }` |
 
 ### Guardrails/GuardrailRunner.swift
 
@@ -2067,7 +2176,6 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 72 | func | public | Tracer.flush() | `public func flush() async` |
 | 101 | class | public | CompositeTracer | `public actor CompositeTracer` |
 | 110 | func | public | CompositeTracer.init(tracers:minimumLevel:shouldExecuteInParallel:) | `public init(tracers: [any Tracer], minimumLevel: EventLevel = .trace, shouldExecuteInParallel: Bool = true)` |
-| 126 | func | public | CompositeTracer.init(tracers:parallel:) | `public convenience init(tracers: [any Tracer], parallel: Bool)` _(Availability: * (deprecated); Use shouldExecuteInParallel instead of parallel)_ |
 | 130 | func | public | CompositeTracer.trace(_:) | `public func trace(_ event: TraceEvent) async` |
 | 151 | func | public | CompositeTracer.flush() | `public func flush() async` |
 | 196 | class | public | NoOpTracer | `public actor NoOpTracer` |
@@ -2109,7 +2217,10 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 53 | var | public | MetricsSnapshot.toolCalls | `public let toolCalls: [String : Int]` |
 | 56 | var | public | MetricsSnapshot.toolErrors | `public let toolErrors: [String : Int]` |
 | 59 | var | public | MetricsSnapshot.toolDurations | `public let toolDurations: [String : [TimeInterval]]` |
-| 64 | var | public | MetricsSnapshot.timestamp | `public let timestamp: Date` |
+| 62 | var | public | MetricsSnapshot.inputTokens | `public let inputTokens: Int` |
+| 65 | var | public | MetricsSnapshot.outputTokens | `public let outputTokens: Int` |
+| 68 | var | public | MetricsSnapshot.totalTokens | `public var totalTokens: Int { get }` |
+| 70 | var | public | MetricsSnapshot.timestamp | `public let timestamp: Date` |
 | 69 | var | public | MetricsSnapshot.successRate | `public var successRate: Double { get }` |
 | 75 | var | public | MetricsSnapshot.errorRate | `public var errorRate: Double { get }` |
 | 81 | var | public | MetricsSnapshot.cancellationRate | `public var cancellationRate: Double { get }` |
@@ -2121,7 +2232,7 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 113 | var | public | MetricsSnapshot.medianExecutionDuration | `public var medianExecutionDuration: TimeInterval? { get }` |
 | 125 | var | public | MetricsSnapshot.p95ExecutionDuration | `public var p95ExecutionDuration: TimeInterval? { get }` |
 | 130 | var | public | MetricsSnapshot.p99ExecutionDuration | `public var p99ExecutionDuration: TimeInterval? { get }` |
-| 145 | func | public | MetricsSnapshot.init(totalExecutions:successfulExecutions:failedExecutions:cancelledExecutions:executionDurations:toolCalls:toolErrors:toolDurations:timestamp:) | `public init(totalExecutions: Int, successfulExecutions: Int, failedExecutions: Int, cancelledExecutions: Int, executionDurations: [TimeInterval], toolCalls: [String : Int], toolErrors: [String : Int], toolDurations: [String : [TimeInterval]], timestamp: Date = Date())` |
+| 145 | func | public | MetricsSnapshot.init(totalExecutions:successfulExecutions:failedExecutions:cancelledExecutions:executionDurations:toolCalls:toolErrors:toolDurations:timestamp:inputTokens:outputTokens:) | `public init(totalExecutions: Int, successfulExecutions: Int, failedExecutions: Int, cancelledExecutions: Int, executionDurations: [TimeInterval], toolCalls: [String : Int], toolErrors: [String : Int], toolDurations: [String : [TimeInterval]], timestamp: Date = Date(), inputTokens: Int = 0, outputTokens: Int = 0)` |
 | 201 | class | public | MetricsCollector | `public actor MetricsCollector` |
 | 207 | var | public | MetricsCollector.maxMetricsHistory | `public let maxMetricsHistory: Int` |
 | 213 | func | public | MetricsCollector.init(maxMetricsHistory:) | `public init(maxMetricsHistory: Int = 10000)` |
@@ -2136,8 +2247,6 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 374 | func | public | MetricsCollector.getToolCalls() | `public func getToolCalls() -> [String : Int]` |
 | 379 | func | public | MetricsCollector.getToolErrors() | `public func getToolErrors() -> [String : Int]` |
 | 384 | func | public | MetricsCollector.getToolDurations() | `public func getToolDurations() -> [String : [TimeInterval]]` |
-| 446 | protocol | public | MetricsReporter | `public protocol MetricsReporter : Sendable` |
-| 451 | func | public | MetricsReporter.report(_:) | `public func report(_ snapshot: MetricsSnapshot) async throws` |
 | 471 | struct | public | JSONMetricsReporter | `public struct JSONMetricsReporter` |
 | 473 | var | public | JSONMetricsReporter.outputPath | `public let outputPath: String?` |
 | 476 | var | public | JSONMetricsReporter.prettyPrint | `public let prettyPrint: Bool` |
@@ -2222,6 +2331,25 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 199 | func | public | TraceContext.getSpans() | `public func getSpans() -> [TraceSpan]` |
 | 240 | var | public | TraceContext.description | `public nonisolated var description: String { get }` |
 | 266 | func | public | TraceContext.withSpan(_:metadata:operation:) | `public func withSpan<T>(_ name: String, metadata: [String : SendableValue] = [:], operation: () async throws -> T) async rethrows -> T where T : Sendable` |
+
+### Observability/TraceContextHeaders.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 27 | struct | public | TraceContextHeaders | `public struct TraceContextHeaders` |
+| 29 | var | public | TraceContextHeaders.traceparentHeaderName | `public static let traceparentHeaderName: String` |
+| 32 | var | public | TraceContextHeaders.tracestateHeaderName | `public static let tracestateHeaderName: String` |
+| 35 | var | public | TraceContextHeaders.traceparentPattern | `public static let traceparentPattern: String` |
+| 38 | var | public | TraceContextHeaders.current | `public static var current: TraceContextHeaders? { get }` |
+| 43 | var | public | TraceContextHeaders.traceparent | `public let traceparent: String` |
+| 46 | var | public | TraceContextHeaders.tracestate | `public let tracestate: String?` |
+| 64 | var | public | TraceContextHeaders.httpHeaders | `public var httpHeaders: [String : String] { get }` |
+| 78 | func | public | TraceContextHeaders.init(traceparent:tracestate:) | `public init?(traceparent: String, tracestate: String? = nil)` |
+| 92 | func | public | TraceContextHeaders.init(traceId:spanId:sampled:tracestate:) | `public init?(traceId: String, spanId: String, sampled: Bool = true, tracestate: String? = nil)` |
+| 114 | func | public | TraceContextHeaders.withCurrent(_:operation:) | `public static func withCurrent<T>(_ headers: TraceContextHeaders?, operation: () async throws -> T) async rethrows -> T where T : Sendable` |
+| 124 | func | public | TraceContextHeaders.applyCurrent(to:) | `public static func applyCurrent(to request: inout URLRequest)` |
+| 129 | func | public | TraceContextHeaders.apply(to:) | `public func apply(to request: inout URLRequest)` |
+| 137 | func | public | TraceContextHeaders.isValidTraceparent(_:) | `public static func isValidTraceparent(_ value: String) -> Bool` |
 
 ### Observability/TraceEvent.swift
 
@@ -2308,6 +2436,22 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 506 | var | public | TraceEvent.description | `public var description: String { get }` |
 | 533 | var | public | EventLevel.description | `public var description: String { get }` |
 
+### Observability/TraceRedactor.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 25 | struct | public | TraceRedactor | `public struct TraceRedactor` |
+| 27 | struct | public | TraceRedactor.Rule | `public struct Rule` |
+| 29 | var | public | TraceRedactor.Rule.name | `public let name: String` |
+| 32 | var | public | TraceRedactor.Rule.pattern | `public let pattern: String` |
+| 35 | var | public | TraceRedactor.Rule.replacement | `public let replacement: String` |
+| 38 | func | public | TraceRedactor.Rule.init(name:pattern:replacement:) | `public init(name: String, pattern: String, replacement: String)` |
+| 50 | var | public | TraceRedactor.Rule.defaults | `public static var defaults: [Rule] { get }` |
+| 87 | var | public | TraceRedactor.none | `public static let none: TraceRedactor` |
+| 90 | var | public | TraceRedactor.rules | `public let rules: [Rule]` |
+| 95 | func | public | TraceRedactor.init(rules:) | `public init(rules: [Rule] = Rule.defaults)` |
+| 100 | func | public | TraceRedactor.redact(_:) | `public func redact(_ text: String) -> String` |
+
 ### Observability/TraceSpan.swift
 
 | Line | Kind | Access | Name | Signature |
@@ -2342,6 +2486,7 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 45 | func | public | TracingHelper.init(tracer:agentName:) | `public init(tracer: (any Tracer)?, agentName: String)` |
 | 57 | func | public | TracingHelper.traceStart(input:) | `public func traceStart(input: String) async` |
 | 74 | func | public | TracingHelper.traceComplete(result:) | `public func traceComplete(result: AgentResult) async` |
+| 88 | func | public | TracingHelper.traceComplete(result:tokenUsage:) | `public func traceComplete(result: AgentResult, tokenUsage: TokenUsage?) async` |
 | 95 | func | public | TracingHelper.traceError(_:) | `public func traceError(_ error: any Error) async` |
 | 119 | func | public | TracingHelper.traceThought(_:) | `public func traceThought(_ thought: String) async` |
 | 137 | func | public | TracingHelper.tracePlan(_:) | `public func tracePlan(_ plan: String) async` |
@@ -2446,8 +2591,27 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
-| 15 | typealias | public | Retry | `public typealias Retry = RetryPolicy` |
-| 16 | typealias | public | Fallback | `public typealias Fallback = FallbackChain` |
+| 21 | typealias | public | Retry | `@available(*, deprecated, renamed: "RetryPolicy") public typealias Retry = RetryPolicy` |
+| 28 | typealias | public | Fallback | `@available(*, deprecated, renamed: "FallbackChain") public typealias Fallback = FallbackChain` |
+
+### Resilience/ResilienceConfiguration.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 20 | struct | public | CircuitBreakerSettings | `public struct CircuitBreakerSettings` |
+| 79 | struct | public | RateLimitSettings | `public struct RateLimitSettings` |
+| 160 | struct | public | ResilienceConfiguration | `public struct ResilienceConfiguration` |
+| 165 | var | public | ResilienceConfiguration.disabled | `public static let disabled: ResilienceConfiguration` |
+| 172 | var | public | ResilienceConfiguration.retryPolicy | `public var retryPolicy: RetryPolicy` |
+| 177 | var | public | ResilienceConfiguration.circuitBreaker | `public var circuitBreaker: CircuitBreakerSettings?` |
+| 182 | var | public | ResilienceConfiguration.rateLimit | `public var rateLimit: RateLimitSettings?` |
+
+### Resilience/InferenceRetryability.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 52 | enum | public | InferenceRetryability | `public enum InferenceRetryability` |
+| 57 | func | public | InferenceRetryability.isRetryable(_:) | `public static func isRetryable(_ error: Error) -> Bool` |
 
 ### Resilience/RetryPolicy.swift
 
@@ -2457,29 +2621,30 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 13 | case | public | ResilienceError.retriesExhausted(attempts:lastError:) | `public case retriesExhausted(attempts: Int, lastError: String)` |
 | 16 | case | public | ResilienceError.circuitBreakerOpen(serviceName:) | `public case circuitBreakerOpen(serviceName: String)` |
 | 19 | case | public | ResilienceError.allFallbacksFailed(errors:) | `public case allFallbacksFailed(errors: [String])` |
-| 25 | var | public | ResilienceError.errorDescription | `public var errorDescription: String? { get }` |
-| 40 | var | public | ResilienceError.debugDescription | `public var debugDescription: String { get }` |
-| 55 | enum | public | BackoffStrategy | `public enum BackoffStrategy` |
-| 61 | func | public | BackoffStrategy.delay(forAttempt:) | `public func delay(forAttempt attempt: Int) -> TimeInterval` |
-| 97 | case | public | BackoffStrategy.fixed(delay:) | `public case fixed(delay: TimeInterval)` |
-| 100 | case | public | BackoffStrategy.linear(initial:increment:maxDelay:) | `public case linear(initial: TimeInterval, increment: TimeInterval, maxDelay: TimeInterval)` |
-| 103 | case | public | BackoffStrategy.exponential(base:multiplier:maxDelay:) | `public case exponential(base: TimeInterval, multiplier: Double, maxDelay: TimeInterval)` |
-| 106 | case | public | BackoffStrategy.exponentialWithJitter(base:multiplier:maxDelay:) | `public case exponentialWithJitter(base: TimeInterval, multiplier: Double, maxDelay: TimeInterval)` |
-| 109 | case | public | BackoffStrategy.decorrelatedJitter(base:maxDelay:) | `public case decorrelatedJitter(base: TimeInterval, maxDelay: TimeInterval)` |
-| 112 | case | public | BackoffStrategy.immediate | `public case immediate` |
-| 120 | case | public | BackoffStrategy.custom(_:) | `public case custom((Int) -> TimeInterval)` |
-| 126 | func | public | BackoffStrategy.==(_:_:) | `public static func == (lhs: BackoffStrategy, rhs: BackoffStrategy) -> Bool` |
-| 152 | struct | public | RetryPolicy | `public struct RetryPolicy` |
-| 160 | var | public | RetryPolicy.noRetry | `public static let noRetry: RetryPolicy` |
-| 163 | var | public | RetryPolicy.standard | `public static let standard: RetryPolicy` |
-| 169 | var | public | RetryPolicy.aggressive | `public static let aggressive: RetryPolicy` |
-| 175 | var | public | RetryPolicy.maxAttempts | `public let maxAttempts: Int` |
-| 178 | var | public | RetryPolicy.backoff | `public let backoff: BackoffStrategy` |
-| 181 | var | public | RetryPolicy.shouldRetry | `public let shouldRetry: (any Error) -> Bool` |
-| 184 | var | public | RetryPolicy.onRetry | `public let onRetry: ((Int, any Error) async -> Void)?` |
-| 194 | func | public | RetryPolicy.init(maxAttempts:backoff:shouldRetry:onRetry:) | `public init(maxAttempts: Int = 3, backoff: BackoffStrategy = .exponential(base: 1.0, multiplier: 2.0, maxDelay: 60.0), shouldRetry: @escaping (any Error) -> Bool = { _ in true }, onRetry: ((Int, any Error) async -> Void)? = nil)` |
-| 213 | func | public | RetryPolicy.execute(_:) | `public func execute<T>(_ operation: () async throws -> T) async throws -> T where T : Sendable` |
-| 271 | func | public | RetryPolicy.==(_:_:) | `public static func == (lhs: RetryPolicy, rhs: RetryPolicy) -> Bool` |
+| 26 | case | public | ResilienceError.invalidMaxAttempts(_:) | `public case invalidMaxAttempts(Int)` |
+| 32 | var | public | ResilienceError.errorDescription | `public var errorDescription: String? { get }` |
+| 49 | var | public | ResilienceError.debugDescription | `public var debugDescription: String { get }` |
+| 66 | enum | public | BackoffStrategy | `public enum BackoffStrategy` |
+| 72 | func | public | BackoffStrategy.delay(forAttempt:) | `public func delay(forAttempt attempt: Int) -> TimeInterval` |
+| 123 | case | public | BackoffStrategy.fixed(delay:) | `public case fixed(delay: TimeInterval)` |
+| 126 | case | public | BackoffStrategy.linear(initial:increment:maxDelay:) | `public case linear(initial: TimeInterval, increment: TimeInterval, maxDelay: TimeInterval)` |
+| 129 | case | public | BackoffStrategy.exponential(base:multiplier:maxDelay:) | `public case exponential(base: TimeInterval, multiplier: Double, maxDelay: TimeInterval)` |
+| 132 | case | public | BackoffStrategy.exponentialWithJitter(base:multiplier:maxDelay:) | `public case exponentialWithJitter(base: TimeInterval, multiplier: Double, maxDelay: TimeInterval)` |
+| 135 | case | public | BackoffStrategy.decorrelatedJitter(base:maxDelay:) | `public case decorrelatedJitter(base: TimeInterval, maxDelay: TimeInterval)` |
+| 138 | case | public | BackoffStrategy.immediate | `public case immediate` |
+| 146 | case | public | BackoffStrategy.custom(_:) | `public case custom((Int) -> TimeInterval)` |
+| 152 | func | public | BackoffStrategy.==(_:_:) | `public static func == (lhs: BackoffStrategy, rhs: BackoffStrategy) -> Bool` |
+| 187 | struct | public | RetryPolicy | `public struct RetryPolicy` |
+| 195 | var | public | RetryPolicy.noRetry | `public static let noRetry: RetryPolicy` |
+| 198 | var | public | RetryPolicy.standard | `public static let standard: RetryPolicy` |
+| 204 | var | public | RetryPolicy.aggressive | `public static let aggressive: RetryPolicy` |
+| 214 | var | public | RetryPolicy.maxAttempts | `public let maxAttempts: Int` |
+| 217 | var | public | RetryPolicy.backoff | `public let backoff: BackoffStrategy` |
+| 220 | var | public | RetryPolicy.shouldRetry | `public let shouldRetry: (any Error) -> Bool` |
+| 223 | var | public | RetryPolicy.onRetry | `public let onRetry: ((Int, any Error) async -> Void)?` |
+| 246 | func | public | RetryPolicy.init(maxAttempts:backoff:shouldRetry:onRetry:) | `public init(maxAttempts: Int = 3, backoff: BackoffStrategy = .exponential(base: 1.0, multiplier: 2.0, maxDelay: 60.0), shouldRetry: @escaping (any Error) -> Bool = { _ in true }, onRetry: ((Int, any Error) async -> Void)? = nil)` |
+| 301 | func | public | RetryPolicy.execute(_:) | `public func execute<T>(_ operation: () async throws -> T) async throws -> T where T : Sendable` |
+| 381 | func | public | RetryPolicy.==(_:_:) | `public static func == (lhs: RetryPolicy, rhs: RetryPolicy) -> Bool` |
 
 ## 9. Workflow
 
@@ -2489,34 +2654,114 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 |------|------|--------|------|-----------|
 | 6 | var | public | Workflow.durable | `public var durable: Workflow.Durable { get }` |
 | 8 | struct | public | Workflow.Durable | `public struct Durable` |
+| — | func | public | Workflow.Durable.configured(id:store:policy:) | `public func configured(id: WorkflowCheckpointID, store: WorkflowCheckpointing, policy: CheckpointPolicy = .onCompletion) -> DurableWorkflow` |
+
+### Workflow/DurableWorkflow.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| — | struct | public | DurableWorkflow | `public struct DurableWorkflow` |
+| — | func | public | DurableWorkflow.execute(_:) | `public func execute(_ input: String) async throws -> AgentResult` |
+| — | func | public | DurableWorkflow.resume(_:from:) | `public func resume(_ input: String, from checkpointID: WorkflowCheckpointID) async throws -> AgentResult` |
+
+### Workflow/WorkflowCheckpointID.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| — | struct | public | WorkflowCheckpointID | `public struct WorkflowCheckpointID` |
+| — | var | public | WorkflowCheckpointID.rawValue | `public let rawValue: String` |
+| — | func | public | WorkflowCheckpointID.init(rawValue:) | `public init(rawValue: String)` |
+| — | func | public | WorkflowCheckpointID.init(_:) | `public init(_ rawValue: String)` |
 
 ### Workflow/Workflow.swift
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
-| 4 | struct | public | Workflow | `public struct Workflow` |
-| 12 | enum | public | Workflow.MergeStrategy | `public enum MergeStrategy` |
-| 15 | case | public | Workflow.MergeStrategy.structured | `public case structured` |
-| 18 | case | public | Workflow.MergeStrategy.indexed | `public case indexed` |
-| 20 | case | public | Workflow.MergeStrategy.first | `public case first` |
-| 22 | case | public | Workflow.MergeStrategy.custom(_:) | `public case custom(([AgentResult]) -> String)` |
-| 25 | func | public | Workflow.init() | `public init()` |
-| 27 | func | public | Workflow.step(_:) | `public func step(_ agent: some AgentRuntime) -> Workflow` |
-| 33 | func | public | Workflow.parallel(_:merge:) | `public func parallel(_ agents: [any AgentRuntime], merge: Workflow.MergeStrategy = .structured) -> Workflow` |
-| 39 | func | public | Workflow.route(_:) | `public func route(_ condition: @escaping (String) -> (any AgentRuntime)?) -> Workflow` |
-| 45 | func | public | Workflow.repeatUntil(maxIterations:_:) | `public func repeatUntil(maxIterations: Int = 100, _ condition: @escaping (AgentResult) -> Bool) -> Workflow` |
-| 55 | func | public | Workflow.timeout(_:) | `public func timeout(_ duration: Duration) -> Workflow` |
-| 61 | func | public | Workflow.observed(by:) | `public func observed(by observer: some AgentObserver) -> Workflow` |
-| 67 | func | public | Workflow.run(_:) | `public func run(_ input: String) async throws -> AgentResult` |
-| 418 | func | public | Workflow.stream(_:) | `public func stream(_ input: String) -> AsyncThrowingStream<AgentEvent, any Error>` |
+| 89 | struct | public | Workflow | `public struct Workflow` |
+| 126 | enum | public | Workflow.MergeStrategy | `public enum MergeStrategy` |
+| 141 | case | public | Workflow.MergeStrategy.structured | `public case structured` |
+| 158 | case | public | Workflow.MergeStrategy.indexed | `public case indexed` |
+| 174 | case | public | Workflow.MergeStrategy.firstCompleted | `public case firstCompleted` |
+| 182 | case | public | Workflow.MergeStrategy.first | `public case first` _(Availability: * (deprecated); renamed to firstCompleted)_ |
+| 202 | case | public | Workflow.MergeStrategy.custom(_:) | `public case custom(@Sendable ([AgentResult]) -> String)` |
+| 218 | func | public | Workflow.init() | `public init()` |
+| 238 | func | public | Workflow.step(_:) | `public func step(_ agent: some AgentRuntime) -> Workflow` |
+| 272 | func | public | Workflow.parallel(_:merge:customMergeSignature:fileID:line:) | `public func parallel(_ agents: [any AgentRuntime], merge: Workflow.MergeStrategy = .structured, customMergeSignature: String? = nil, fileID: StaticString = #fileID, line: UInt = #line) -> Workflow` |
+| 325 | func | public | Workflow.route(_:signature:fileID:line:) | `public func route(_ condition: @escaping @Sendable (String) -> (any AgentRuntime)?, signature: String? = nil, fileID: StaticString = #fileID, line: UInt = #line) -> Workflow` |
+| 341 | func | public | Workflow.route(signature:fileID:line:_:) | `public func route(signature: String, fileID: StaticString = #fileID, line: UInt = #line, _ condition: @escaping @Sendable (String) -> (any AgentRuntime)?) -> Workflow` |
+| 377 | func | public | Workflow.repeatUntil(maxIterations:_:signature:fileID:line:) | `public func repeatUntil(maxIterations: Int = 100, _ condition: @escaping @Sendable (AgentResult) -> Bool, signature: String? = nil, fileID: StaticString = #fileID, line: UInt = #line) -> Workflow` |
+| 397 | func | public | Workflow.repeatUntil(maxIterations:signature:fileID:line:_:) | `public func repeatUntil(maxIterations: Int = 100, signature: String, fileID: StaticString = #fileID, line: UInt = #line, _ condition: @escaping @Sendable (AgentResult) -> Bool) -> Workflow` |
+| 423 | func | public | Workflow.timeout(_:) | `public func timeout(_ duration: Duration) -> Workflow` |
+| 449 | func | public | Workflow.observed(by:) | `public func observed(by observer: some AgentObserver) -> Workflow` |
+| — | func | public | Workflow.fallback(primary:to:retries:) | `public func fallback(primary: some AgentRuntime, to backup: some AgentRuntime, retries: Int = 0) -> Workflow` |
+| 476 | func | public | Workflow.run(_:) | `public func run(_ input: String) async throws -> AgentResult` |
+| 528 | func | public | Workflow.stream(_:) | `public func stream(_ input: String) -> AsyncThrowingStream<AgentEvent, Error>` |
 
 ### Workflow/WorkflowCheckpointing.swift
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
-| 5 | struct | public | WorkflowCheckpointing | `public struct WorkflowCheckpointing` |
-| 13 | func | public | WorkflowCheckpointing.inMemory() | `public static func inMemory() -> WorkflowCheckpointing` |
-| 19 | func | public | WorkflowCheckpointing.fileSystem(directory:) | `public static func fileSystem(directory: URL) -> WorkflowCheckpointing` |
+| 8 | struct | public | WorkflowCheckpointRetention | `public struct WorkflowCheckpointRetention` |
+| 10 | var | public | WorkflowCheckpointRetention.default | `public static let \`default\`: WorkflowCheckpointRetention` |
+| 15 | var | public | WorkflowCheckpointRetention.maxCheckpointsPerRun | `public var maxCheckpointsPerRun: Int` |
+| 21 | func | public | WorkflowCheckpointRetention.init(maxCheckpointsPerRun:) | `public init(maxCheckpointsPerRun: Int = 16)` |
+| 27 | struct | public | WorkflowCheckpointing | `public struct WorkflowCheckpointing` |
+| 49 | func | public | WorkflowCheckpointing.inMemory() | `public static func inMemory() -> WorkflowCheckpointing` |
+| 70 | func | public | WorkflowCheckpointing.fileSystem(directory:retention:) | `public static func fileSystem(directory: URL, retention: WorkflowCheckpointRetention = .default) -> WorkflowCheckpointing` |
+| — | func | public | WorkflowCheckpointing.hardenFilePermissions(in:) | `public static func hardenFilePermissions(in directory: URL) throws -> Int` |
+
+## 9b. Job
+
+### Job/Job.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 7 | struct | public | JobChild | `public struct JobChild` |
+| 8 | var | public | JobChild.name | `public let name: String` |
+| 9 | var | public | JobChild.agent | `public let agent: any AgentRuntime` |
+| 10 | var | public | JobChild.brief | `public let brief: String` |
+| 12 | func | public | JobChild.init(name:agent:brief:) | `public init(name: String, agent: some AgentRuntime, brief: String)` |
+| 20 | struct | public | JobChildResult | `public struct JobChildResult` |
+| 21 | var | public | JobChildResult.name | `public let name: String` |
+| 22 | var | public | JobChildResult.result | `public let result: AgentResult` |
+| 24 | func | public | JobChildResult.init(name:result:) | `public init(name: String, result: AgentResult)` |
+| 54 | struct | public | Job | `public struct Job` |
+| 57 | func | public | Job.init(store:) | `public init(store: any JobStore = InMemoryJobStore())` |
+| 62 | func | public | Job.run(_:body:) | `public func run<Output: Sendable>(_ input: String, body: @Sendable (JobSession) async throws -> Output) async throws -> Output` |
+| 71 | struct | public | JobSession | `public struct JobSession` |
+| 73 | var | public | JobSession.input | `public let input: String` |
+| 85 | func | public | JobSession.ingest(_:) | `public func ingest(_ record: JobRecord) async` |
+| 97 | func | public | JobSession.window(query:tokenLimit:) | `public func window(query: String, tokenLimit: Int) async -> String` |
+| 107 | func | public | JobSession.records(kind:) | `public func records(kind: String) async -> [JobRecord]` |
+| 117 | func | public | JobSession.fanOut(_:) | `public func fanOut(_ children: [JobChild]) async throws -> [JobChildResult]` |
+
+### Job/JobStore.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 4 | struct | public | JobRecord | `public struct JobRecord` |
+| 6 | var | public | JobRecord.kind | `public let kind: String` |
+| 9 | var | public | JobRecord.text | `public let text: String` |
+| 11 | func | public | JobRecord.init(kind:text:) | `public init(kind: String, text: String)` |
+| 24 | protocol | public | JobStore | `public protocol JobStore` |
+| 26 | func | public | JobStore.ingest(_:) | `func ingest(_ record: JobRecord) async` |
+| 29 | func | public | JobStore.records() | `func records() async -> [JobRecord]` |
+| 32 | func | public | JobStore.records(kind:) | `func records(kind: String) async -> [JobRecord]` |
+| 36 | class | public | InMemoryJobStore | `public actor InMemoryJobStore` |
+| 39 | func | public | InMemoryJobStore.init() | `public init()` |
+| 41 | func | public | InMemoryJobStore.ingest(_:) | `public func ingest(_ record: JobRecord) async` |
+| 45 | func | public | InMemoryJobStore.records() | `public func records() async -> [JobRecord]` |
+| 49 | func | public | InMemoryJobStore.records(kind:) | `public func records(kind: String) async -> [JobRecord]` |
+
+### Job/JobError.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 8 | enum | public | JobError | `public enum JobError` |
+| 10 | case | public | JobError.emptyChildName | `public case emptyChildName` |
+| 13 | case | public | JobError.duplicateChildName(_:) | `public case duplicateChildName(String)` |
+| 16 | case | public | JobError.emptyFanOut | `public case emptyFanOut` |
+| 19 | case | public | JobError.fanOutAlreadyUsed | `public case fanOutAlreadyUsed` |
 
 ## 10. MCP
 
@@ -2528,12 +2773,26 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 56 | var | public | HTTPMCPServer.name | `public let name: String` |
 | 62 | var | public | HTTPMCPServer.capabilities | `public var capabilities: MCPCapabilities { get }` |
 | 77 | func | public | HTTPMCPServer.init(url:name:apiKey:timeout:maxRetries:session:) | `public init(url: URL, name: String, apiKey: String? = nil, timeout: TimeInterval = 30.0, maxRetries: Int = 3, session: URLSession = .shared) throws` |
+| — | func | public | HTTPMCPServer.init(url:name:apiKeyReference:secretStore:timeout:maxRetries:session:) | `public init(url: URL, name: String, apiKeyReference: SecretReference, secretStore: any SecretStore, timeout: TimeInterval = 30.0, maxRetries: Int = 3, session: URLSession = .shared) throws` |
+| 70 | var | public | HTTPMCPServer.negotiatedProtocolVersion | `public var negotiatedProtocolVersion: String? { get }` |
+| 76 | var | public | HTTPMCPServer.sessionID | `public var sessionID: String? { get }` |
 | 113 | func | public | HTTPMCPServer.initialize() | `public func initialize() async throws -> MCPCapabilities` |
 | 142 | func | public | HTTPMCPServer.listTools() | `public func listTools() async throws -> [ToolSchema]` |
 | 164 | func | public | HTTPMCPServer.callTool(name:arguments:) | `public func callTool(name: String, arguments: [String : SendableValue]) async throws -> SendableValue` |
+| 180 | func | public | HTTPMCPServer.callToolRaw(name:arguments:) | `public func callToolRaw(name: String, arguments: [String : SendableValue]) async throws -> SendableValue` |
 | 188 | func | public | HTTPMCPServer.listResources() | `public func listResources() async throws -> [MCPResource]` |
 | 208 | func | public | HTTPMCPServer.readResource(uri:) | `public func readResource(uri: String) async throws -> MCPResourceContent` |
 | 259 | func | public | HTTPMCPServer.close() | `public func close() async throws` |
+
+### MCP/StdioMCPServer.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| — | class | public | StdioMCPServer | `public actor StdioMCPServer` |
+| — | var | public | StdioMCPServer.defaultEnvironmentAllowlist | `public static let defaultEnvironmentAllowlist: Set<String>` |
+| — | var | public | StdioMCPServer.defaultSandboxPATH | `public static let defaultSandboxPATH: String` |
+| — | func | public | StdioMCPServer.init(command:arguments:environment:inheritedEnvironmentKeys:workingDirectory:allowedWorkingDirectoryRoot:name:timeout:) | `public init(command: String, arguments: [String] = [], environment: [String: String]? = nil, inheritedEnvironmentKeys: Set<String> = [], workingDirectory: URL? = nil, allowedWorkingDirectoryRoot: URL? = nil, name: String, timeout: TimeInterval = 30.0) throws` |
+| — | func | public | StdioMCPServer.callToolRaw(name:arguments:) | `public func callToolRaw(name: String, arguments: [String : SendableValue]) async throws -> SendableValue` |
 
 ### MCP/MCPCapabilities.swift
 
@@ -2555,7 +2814,7 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 56 | class | public | MCPClient | `public actor MCPClient` |
 | 68 | var | public | MCPClient.connectedServers | `public var connectedServers: [String] { get }` |
 | 77 | func | public | MCPClient.init() | `public init()` |
-| 99 | func | public | MCPClient.addServer(_:) | `public func addServer(_ server: any MCPServer) async throws` |
+| 99 | func | public | MCPClient.addServer(_:) | `public func addServer(_ server: any MCPServerConnection) async throws` |
 | 135 | func | public | MCPClient.removeServer(named:) | `public func removeServer(named name: String) async throws` |
 | 174 | func | public | MCPClient.getAllTools() | `public func getAllTools() async throws -> [any AnyJSONTool]` |
 | 279 | func | public | MCPClient.refreshTools() | `public func refreshTools() async throws -> [any AnyJSONTool]` |
@@ -2586,6 +2845,7 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 115 | func | public | MCPError.methodNotFound(_:) | `public static func methodNotFound(_ method: String? = nil) -> MCPError` |
 | 128 | func | public | MCPError.invalidParams(_:) | `public static func invalidParams(_ details: String? = nil) -> MCPError` |
 | 139 | func | public | MCPError.internalError(_:) | `public static func internalError(_ details: String? = nil) -> MCPError` |
+| — | func | public | MCPError.unsupportedProtocolVersion(_:) | `public static func unsupportedProtocolVersion(_ version: String) -> MCPError` |
 | 150 | var | public | MCPError.errorDescription | `public var errorDescription: String? { get }` |
 | 162 | var | public | MCPError.debugDescription | `public var debugDescription: String { get }` |
 | 176 | func | public | MCPError.init(from:) | `public init(from decoder: any Decoder) throws` |
@@ -2611,8 +2871,8 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 224 | func | public | MCPResponse.init(jsonrpc:id:result:error:) | `public init(jsonrpc: String = "2.0", id: String, result: SendableValue? = nil, error: MCPErrorObject? = nil) throws` |
 | 249 | func | public | MCPResponse.init(from:) | `public init(from decoder: any Decoder) throws` |
 | 291 | func | public | MCPResponse.encode(to:) | `public func encode(to encoder: any Encoder) throws` |
-| 339 | func | public | MCPResponse.success(id:result:) | `public static func success(id: String, result: SendableValue) -> MCPResponse` |
-| 358 | func | public | MCPResponse.failure(id:error:) | `public static func failure(id: String, error: MCPErrorObject) -> MCPResponse` |
+| 339 | func | public | MCPResponse.success(id:result:) | `public static func success(id: String, result: SendableValue) throws -> MCPResponse` |
+| 358 | func | public | MCPResponse.failure(id:error:) | `public static func failure(id: String, error: MCPErrorObject) throws -> MCPResponse` |
 | 399 | struct | public | MCPErrorObject | `public struct MCPErrorObject` |
 | 405 | var | public | MCPErrorObject.code | `public let code: Int` |
 | 411 | var | public | MCPErrorObject.message | `public let message: String` |
@@ -2647,170 +2907,186 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
-| 90 | protocol | public | MCPServer | `public protocol MCPServer : Sendable` |
-| 95 | var | public | MCPServer.name | `public var name: String { get }` |
-| 112 | var | public | MCPServer.capabilities | `public var capabilities: MCPCapabilities { get async }` |
-| 138 | func | public | MCPServer.initialize() | `public func initialize() async throws -> MCPCapabilities` |
-| 159 | func | public | MCPServer.close() | `public func close() async throws` |
-| 182 | func | public | MCPServer.listTools() | `public func listTools() async throws -> [ToolSchema]` |
-| 216 | func | public | MCPServer.callTool(name:arguments:) | `public func callTool(name: String, arguments: [String : SendableValue]) async throws -> SendableValue` |
-| 239 | func | public | MCPServer.listResources() | `public func listResources() async throws -> [MCPResource]` |
-| 265 | func | public | MCPServer.readResource(uri:) | `public func readResource(uri: String) async throws -> MCPResourceContent` |
-| 276 | func | public | MCPServer.requireToolsCapability() | `public func requireToolsCapability() async throws` |
-| 288 | func | public | MCPServer.requireResourcesCapability() | `public func requireResourcesCapability() async throws` |
-| 301 | enum | public | MCPServerState | `public enum MCPServerState` |
-| 305 | var | public | MCPServerState.isReady | `public var isReady: Bool { get }` |
-| 310 | var | public | MCPServerState.isTerminated | `public var isTerminated: Bool { get }` |
-| 321 | case | public | MCPServerState.created | `public case created` |
-| 324 | case | public | MCPServerState.initializing | `public case initializing` |
-| 327 | case | public | MCPServerState.ready | `public case ready` |
-| 330 | case | public | MCPServerState.closing | `public case closing` |
-| 333 | case | public | MCPServerState.closed | `public case closed` |
-| 336 | case | public | MCPServerState.error(_:) | `public case error(String)` |
+| 90 | protocol | public | MCPServerConnection | `public protocol MCPServerConnection : Sendable` |
+| 95 | var | public | MCPServerConnection.name | `public var name: String { get }` |
+| 112 | var | public | MCPServerConnection.capabilities | `public var capabilities: MCPCapabilities { get async }` |
+| 138 | func | public | MCPServerConnection.initialize() | `public func initialize() async throws -> MCPCapabilities` |
+| 159 | func | public | MCPServerConnection.close() | `public func close() async throws` |
+| 182 | func | public | MCPServerConnection.listTools() | `public func listTools() async throws -> [ToolSchema]` |
+| 216 | func | public | MCPServerConnection.callTool(name:arguments:) | `public func callTool(name: String, arguments: [String : SendableValue]) async throws -> SendableValue` |
+| 239 | func | public | MCPServerConnection.listResources() | `public func listResources() async throws -> [MCPResource]` |
+| 265 | func | public | MCPServerConnection.readResource(uri:) | `public func readResource(uri: String) async throws -> MCPResourceContent` |
+| 276 | func | public | MCPServerConnection.requireToolsCapability() | `public func requireToolsCapability() async throws` |
+| 288 | func | public | MCPServerConnection.requireResourcesCapability() | `public func requireResourcesCapability() async throws` |
+| — | typealias | public | MCPServer | `@available(*, deprecated, renamed: "MCPServerConnection") public typealias MCPServer = MCPServerConnection` |
 
 ### MCP/MCPToolBridge.swift
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
 | 36 | class | public | MCPToolBridge | `public actor MCPToolBridge` |
-| 44 | func | public | MCPToolBridge.init(server:) | `public init(server: any MCPServer)` |
+| 44 | func | public | MCPToolBridge.init(server:) | `public init(server: any MCPServerConnection)` |
 | 69 | func | public | MCPToolBridge.bridgeTools() | `public func bridgeTools() async throws -> [any AnyJSONTool]` |
 
 ## 11. Providers
 
-### Providers/Conduit/ConduitProviderSelection.swift
+### Providers/ConversationInferenceProvider.swift
+
+Provider-facing conversation message. The payload is a closed `Body`; `role`, `content`, `name`, `toolCallID`, and `toolCalls` project from `body`.
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
-| 12 | enum | public | ConduitProviderSelection | `public enum ConduitProviderSelection` |
-| 13 | case | public | ConduitProviderSelection.provider(_:) | `public case provider(any InferenceProvider)` |
-| 16 | func | public | ConduitProviderSelection.anthropic(apiKey:model:) | `public static func anthropic(apiKey: String, model: String) -> ConduitProviderSelection` |
-| 24 | func | public | ConduitProviderSelection.openAI(apiKey:model:) | `public static func openAI(apiKey: String, model: String) -> ConduitProviderSelection` |
-| 35 | func | public | ConduitProviderSelection.openRouter(apiKey:model:routing:) | `public static func openRouter(apiKey: String, model: String, routing: OpenRouterRouting? = nil) -> ConduitProviderSelection` |
-| 51 | func | public | ConduitProviderSelection.ollama(model:settings:) | `public static func ollama(model: String, settings: OllamaSettings = .default) -> ConduitProviderSelection` |
-| 69 | func | public | ConduitProviderSelection.ollama(model:baseURL:) | `public static func ollama(model: String, baseURL: String) -> ConduitProviderSelection` |
-| 92 | func | public | ConduitProviderSelection.gemini(apiKey:model:) | `public static func gemini(apiKey: String, model: String = "gemini-2.0-flash") -> ConduitProviderSelection` |
-| 101 | func | public | ConduitProviderSelection.makeProvider() | `public func makeProvider() -> any InferenceProvider` |
-| 108 | func | public | ConduitProviderSelection.generate(prompt:options:) | `public func generate(prompt: String, options: InferenceOptions) async throws -> String` |
-| 112 | func | public | ConduitProviderSelection.stream(prompt:options:) | `public func stream(prompt: String, options: InferenceOptions) -> AsyncThrowingStream<String, any Error>` |
-| 116 | func | public | ConduitProviderSelection.generateWithToolCalls(prompt:tools:options:) | `public func generateWithToolCalls(prompt: String, tools: [ToolSchema], options: InferenceOptions) async throws -> InferenceResponse` |
-| 132 | func | public | InferenceProvider.anthropic(apiKey:model:) | `public static func anthropic(apiKey: String, model: String = "claude-sonnet-4-5") -> ConduitProviderSelection` |
-| 136 | func | public | InferenceProvider.openAI(apiKey:model:) | `public static func openAI(apiKey: String, model: String = "gpt-4o") -> ConduitProviderSelection` |
-| 140 | func | public | InferenceProvider.openRouter(apiKey:model:routing:) | `public static func openRouter(apiKey: String, model: String, routing: OpenRouterRouting? = nil) -> ConduitProviderSelection` |
-| 148 | func | public | InferenceProvider.ollama(model:settings:) | `public static func ollama(model: String, settings: OllamaSettings = .default) -> ConduitProviderSelection` |
-| 155 | func | public | InferenceProvider.ollama(model:baseURL:) | `public static func ollama(model: String, baseURL: String) -> ConduitProviderSelection` |
-| 162 | func | public | InferenceProvider.gemini(apiKey:model:) | `public static func gemini(apiKey: String, model: String = "gemini-2.0-flash") -> ConduitProviderSelection` |
-| 173 | func | public | ConduitProviderSelection.streamWithToolCalls(prompt:tools:options:) | `public func streamWithToolCalls(prompt: String, tools: [ToolSchema], options: InferenceOptions) -> AsyncThrowingStream<InferenceStreamUpdate, any Error>` |
+| 74 | struct | public | InferenceMessage | `public struct InferenceMessage` |
+| 75 | enum | public | InferenceMessage.Role | `public enum Role` |
+| 76 | case | public | InferenceMessage.Role.system | `public case system` |
+| 77 | case | public | InferenceMessage.Role.user | `public case user` |
+| 78 | case | public | InferenceMessage.Role.assistant | `public case assistant` |
+| 79 | case | public | InferenceMessage.Role.tool | `public case tool` |
+| 86 | enum | public | InferenceMessage.Body | `public enum Body` |
+| 88 | case | public | InferenceMessage.Body.system(_:) | `public case system(String)` |
+| 90 | case | public | InferenceMessage.Body.user(_:) | `public case user(String)` |
+| 92 | case | public | InferenceMessage.Body.assistant(_:toolCalls:) | `public case assistant(String, toolCalls: [InferenceMessage.ToolCall] = [])` |
+| 94 | case | public | InferenceMessage.Body.tool(name:content:toolCallID:) | `public case tool(name: String, content: String, toolCallID: String?)` |
+| 98 | struct | public | InferenceMessage.ToolCall | `public struct ToolCall` |
+| 99 | var | public | InferenceMessage.ToolCall.id | `public let id: String?` |
+| 100 | var | public | InferenceMessage.ToolCall.name | `public let name: String` |
+| 101 | var | public | InferenceMessage.ToolCall.arguments | `public let arguments: [String: SendableValue]` |
+| 103 | var | public | InferenceMessage.ToolCall.thoughtSignature | `public let thoughtSignature: String?` |
+| 105 | func | public | InferenceMessage.ToolCall.init(id:name:arguments:thoughtSignature:) | `public init(id: String? = nil, name: String, arguments: [String: SendableValue], thoughtSignature: String? = nil)` |
+| 9 | struct | public | InferenceProviderCapabilities | `public struct InferenceProviderCapabilities: OptionSet, Sendable, Hashable` |
+| 46 | var | public | InferenceProviderCapabilities.multimodalAudio | `public static let multimodalAudio: InferenceProviderCapabilities` |
+| 50 | var | public | InferenceProviderCapabilities.multimodalImages | `public static let multimodalImages: InferenceProviderCapabilities` |
+| 111 | var | public | InferenceMessage.body | `public let body: InferenceMessage.Body` |
+| 114 | var | public | InferenceMessage.attachments | `public let attachments: [InferenceMessage.Attachment]` |
+| 114 | var | public | InferenceMessage.role | `public var role: InferenceMessage.Role { get }` |
+| 128 | var | public | InferenceMessage.content | `public var content: String { get }` |
+| 140 | var | public | InferenceMessage.name | `public var name: String? { get }` |
+| 150 | var | public | InferenceMessage.toolCallID | `public var toolCallID: String? { get }` |
+| 160 | var | public | InferenceMessage.toolCalls | `public var toolCalls: [InferenceMessage.ToolCall] { get }` |
+| 114 | struct | public | InferenceMessage.Attachment | `public struct Attachment: Sendable, Equatable` |
+| 172 | func | public | InferenceMessage.init(body:attachments:) | `public init(body: InferenceMessage.Body, attachments: [InferenceMessage.Attachment] = [])` |
+| 192 | func | public | InferenceMessage.init(role:content:name:toolCallID:toolCalls:) | `@available(*, deprecated, message: "Use init(body:) or the role factories.") public init(role: InferenceMessage.Role, content: String, name: String? = nil, toolCallID: String? = nil, toolCalls: [InferenceMessage.ToolCall] = [])` |
+| 211 | func | public | InferenceMessage.system(_:) | `public static func system(_ content: String) -> InferenceMessage` |
+| 215 | func | public | InferenceMessage.user(_:attachments:) | `public static func user(_ content: String, attachments: [InferenceMessage.Attachment] = []) -> InferenceMessage` |
+| 219 | func | public | InferenceMessage.assistant(_:toolCalls:) | `public static func assistant(_ content: String, toolCalls: [InferenceMessage.ToolCall] = []) -> InferenceMessage` |
+| 223 | func | public | InferenceMessage.tool(name:content:toolCallID:) | `public static func tool(name: String, content: String, toolCallID: String? = nil) -> InferenceMessage` |
 
-### Providers/Conduit/LLM.swift
+### Providers/OpenAICompatible/OpenAICompatibleProvider.swift
 
-| Line | Kind | Access | Name | Signature |
-|------|------|--------|------|-----------|
-| 12 | enum | public | LLM | `public enum LLM` |
-| 13 | case | public | LLM.openAI(_:) | `public case openAI(LLM.OpenAIConfig)` |
-| 14 | case | public | LLM.anthropic(_:) | `public case anthropic(LLM.AnthropicConfig)` |
-| 15 | case | public | LLM.openRouter(_:) | `public case openRouter(LLM.OpenRouterConfig)` |
-| 16 | case | public | LLM.ollama(_:) | `public case ollama(LLM.OllamaConfig)` |
-| 20 | func | public | LLM.openAI(apiKey:model:) | `public static func openAI(apiKey: String, model: String = "gpt-4o-mini") -> LLM` |
-| 27 | func | public | LLM.openAI(key:model:) | `public static func openAI(key: String, model: String = "gpt-4o-mini") -> LLM` |
-| 34 | func | public | LLM.anthropic(apiKey:model:) | `public static func anthropic(apiKey: String, model: String = AnthropicModelID.claude35Sonnet.rawValue) -> LLM` |
-| 41 | func | public | LLM.anthropic(key:model:) | `public static func anthropic(key: String, model: String = AnthropicModelID.claude35Sonnet.rawValue) -> LLM` |
-| 48 | func | public | LLM.openRouter(apiKey:model:) | `public static func openRouter(apiKey: String, model: String = "anthropic/claude-3.5-sonnet") -> LLM` |
-| 55 | func | public | LLM.openRouter(key:model:) | `public static func openRouter(key: String, model: String = "anthropic/claude-3.5-sonnet") -> LLM` |
-| 65 | func | public | LLM.advanced(_:) | `public func advanced(_ update: (inout LLM.AdvancedOptions) -> Void) -> LLM` |
-| 84 | func | public | LLM.generate(prompt:options:) | `public func generate(prompt: String, options: InferenceOptions) async throws -> String` |
-| 88 | func | public | LLM.stream(prompt:options:) | `public func stream(prompt: String, options: InferenceOptions) -> AsyncThrowingStream<String, any Error>` |
-| 92 | func | public | LLM.generateWithToolCalls(prompt:tools:options:) | `public func generateWithToolCalls(prompt: String, tools: [ToolSchema], options: InferenceOptions) async throws -> InferenceResponse` |
-| 155 | func | public | LLM.streamWithToolCalls(prompt:tools:options:) | `public func streamWithToolCalls(prompt: String, tools: [ToolSchema], options: InferenceOptions) -> AsyncThrowingStream<InferenceStreamUpdate, any Error>` |
-| 173 | func | public | InferenceProvider.openAI(apiKey:model:) | `public static func openAI(apiKey: String, model: String = "gpt-4o-mini") -> LLM` |
-| 177 | func | public | InferenceProvider.openAI(key:model:) | `public static func openAI(key: String, model: String = "gpt-4o-mini") -> LLM` |
-| 181 | func | public | InferenceProvider.anthropic(apiKey:model:) | `public static func anthropic(apiKey: String, model: String = AnthropicModelID.claude35Sonnet.rawValue) -> LLM` |
-| 185 | func | public | InferenceProvider.anthropic(key:model:) | `public static func anthropic(key: String, model: String = AnthropicModelID.claude35Sonnet.rawValue) -> LLM` |
-| 189 | func | public | InferenceProvider.openRouter(apiKey:model:) | `public static func openRouter(apiKey: String, model: String = "anthropic/claude-3.5-sonnet") -> LLM` |
-| 193 | func | public | InferenceProvider.openRouter(key:model:) | `public static func openRouter(key: String, model: String = "anthropic/claude-3.5-sonnet") -> LLM` |
-| 202 | func | public | InferenceProvider.ollama(_:settings:) | `public static func ollama(_ model: String, settings: OllamaSettings = .default) -> LLM` |
-| 210 | struct | public | LLM.OpenAIConfig | `public struct OpenAIConfig` |
-| 211 | var | public | LLM.OpenAIConfig.apiKey | `public var apiKey: String` |
-| 212 | var | public | LLM.OpenAIConfig.model | `public var model: String` |
-| 213 | var | public | LLM.OpenAIConfig.advanced | `public var advanced: LLM.AdvancedOptions` |
-| 215 | func | public | LLM.OpenAIConfig.init(apiKey:model:) | `public init(apiKey: String, model: String)` |
-| 221 | struct | public | LLM.AnthropicConfig | `public struct AnthropicConfig` |
-| 222 | var | public | LLM.AnthropicConfig.apiKey | `public var apiKey: String` |
-| 223 | var | public | LLM.AnthropicConfig.model | `public var model: String` |
-| 224 | var | public | LLM.AnthropicConfig.advanced | `public var advanced: LLM.AdvancedOptions` |
-| 226 | func | public | LLM.AnthropicConfig.init(apiKey:model:) | `public init(apiKey: String, model: String)` |
-| 232 | struct | public | LLM.OpenRouterConfig | `public struct OpenRouterConfig` |
-| 233 | var | public | LLM.OpenRouterConfig.apiKey | `public var apiKey: String` |
-| 234 | var | public | LLM.OpenRouterConfig.model | `public var model: String` |
-| 235 | var | public | LLM.OpenRouterConfig.advanced | `public var advanced: LLM.AdvancedOptions` |
-| 237 | func | public | LLM.OpenRouterConfig.init(apiKey:model:) | `public init(apiKey: String, model: String)` |
-| 243 | struct | public | LLM.AdvancedOptions | `public struct AdvancedOptions` |
-| 244 | var | public | LLM.AdvancedOptions.default | `public static let `default`: LLM.AdvancedOptions` |
-| 249 | var | public | LLM.AdvancedOptions.openRouter | `public var openRouter: LLM.OpenRouterOptions` |
-| 251 | func | public | LLM.AdvancedOptions.init(openRouter:) | `public init(openRouter: LLM.OpenRouterOptions = .default)` |
-| 262 | struct | public | LLM.OpenRouterOptions | `public struct OpenRouterOptions` |
-| 263 | var | public | LLM.OpenRouterOptions.default | `public static let `default`: LLM.OpenRouterOptions` |
-| 265 | var | public | LLM.OpenRouterOptions.routing | `public var routing: OpenRouterRouting?` |
-| 267 | func | public | LLM.OpenRouterOptions.init(routing:) | `public init(routing: OpenRouterRouting? = nil)` |
-| 273 | struct | public | LLM.OllamaConfig | `public struct OllamaConfig` |
-| 275 | var | public | LLM.OllamaConfig.model | `public var model: String` |
-| 277 | var | public | LLM.OllamaConfig.settings | `public var settings: OllamaSettings` |
-| 279 | func | public | LLM.OllamaConfig.init(model:settings:) | `public init(model: String, settings: OllamaSettings = .default)` |
+OpenAI-compatible Chat Completions provider (`URLSession` only). Covers OpenAI, Azure OpenAI, OpenRouter, Ollama, and LM Studio.
 
-### Providers/Conduit/OllamaSettings.swift
+| Kind | Access | Name | Signature |
+|------|--------|------|-----------|
+| enum | public | OpenAICompatibleStructuredOutputMode | `public enum OpenAICompatibleStructuredOutputMode` |
+| struct | public | OpenAICompatibleProviderConfiguration | `public struct OpenAICompatibleProviderConfiguration` |
+| func | public | OpenAICompatibleProviderConfiguration.openAI(apiKey:model:) | `public static func openAI(apiKey: String, model: String = "gpt-4o") -> OpenAICompatibleProviderConfiguration` |
+| func | public | OpenAICompatibleProviderConfiguration.azureOpenAI(resource:deployment:apiKey:apiVersion:model:) | `public static func azureOpenAI(resource: String, deployment: String, apiKey: String, apiVersion: String = "2024-10-21", model: String? = nil) -> OpenAICompatibleProviderConfiguration` |
+| func | public | OpenAICompatibleProviderConfiguration.openRouter(apiKey:model:httpHeaders:) | `public static func openRouter(apiKey: String, model: String, httpHeaders: [String: String] = [:]) -> OpenAICompatibleProviderConfiguration` |
+| func | public | OpenAICompatibleProviderConfiguration.ollama(model:baseURL:) | `public static func ollama(model: String, baseURL: URL = URL(string: "http://127.0.0.1:11434/v1")!) -> OpenAICompatibleProviderConfiguration` |
+| func | public | OpenAICompatibleProviderConfiguration.lmStudio(model:baseURL:apiKey:) | `public static func lmStudio(model: String, baseURL: URL = URL(string: "http://127.0.0.1:1234/v1")!, apiKey: String? = nil) -> OpenAICompatibleProviderConfiguration` |
+| struct | public | OpenAICompatibleProvider | `public struct OpenAICompatibleProvider` |
+| var | public | OpenAICompatibleProviderConfiguration.apiKeyReference | `public var apiKeyReference: SecretReference?` |
+| 91 | var | public | OpenAICompatibleProviderConfiguration.supportsMultimodalAudio | `public var supportsMultimodalAudio: Bool` |
+| func | public | OpenAICompatibleProviderConfiguration.resolveAPIKey(using:reference:) | `public func resolveAPIKey(using store: (any SecretStore)?, reference: SecretReference? = nil) async throws -> String?` |
+| func | public | OpenAICompatibleProvider.init(configuration:secretStore:session:) | `public init(configuration: OpenAICompatibleProviderConfiguration, secretStore: any SecretStore, session: URLSession = .shared)` |
+| func | public | InferenceProvider.openAICompatible(_:) | `public static func openAICompatible(_ configuration: OpenAICompatibleProviderConfiguration, session: URLSession = .shared) -> OpenAICompatibleProvider` |
+| func | public | InferenceProvider.openAICompatible(_:secretStore:session:) | `public static func openAICompatible(_ configuration: OpenAICompatibleProviderConfiguration, secretStore: any SecretStore, session: URLSession = .shared) -> OpenAICompatibleProvider` |
+
+### Providers/FoundationModels/FoundationModelsInferenceProvider.swift
+
+First-class Apple Foundation Models path (on-device `SystemLanguageModel`, plus OS 27 `LanguageModel` / `PrivateCloudComputeLanguageModel`). Gated by `#if canImport(FoundationModels)` and `@available(macOS 26.0, iOS 26.0, visionOS 26.0, *)`. Capture rehydrates `Transcript` when history is representable; flattening is the fallback.
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
-| 9 | struct | public | OllamaSettings | `public struct OllamaSettings` |
-| 10 | var | public | OllamaSettings.host | `public var host: String` |
-| 11 | var | public | OllamaSettings.port | `public var port: Int` |
-| 12 | var | public | OllamaSettings.keepAlive | `public var keepAlive: String?` |
-| 13 | var | public | OllamaSettings.pullOnMissing | `public var pullOnMissing: Bool` |
-| 14 | var | public | OllamaSettings.numGPU | `public var numGPU: Int?` |
-| 15 | var | public | OllamaSettings.lowVRAM | `public var lowVRAM: Bool` |
-| 16 | var | public | OllamaSettings.numCtx | `public var numCtx: Int?` |
-| 17 | var | public | OllamaSettings.healthCheck | `public var healthCheck: Bool` |
-| 19 | func | public | OllamaSettings.init(host:port:keepAlive:pullOnMissing:numGPU:lowVRAM:numCtx:healthCheck:) | `public init(host: String = "localhost", port: Int = 11434, keepAlive: String? = nil, pullOnMissing: Bool = false, numGPU: Int? = nil, lowVRAM: Bool = false, numCtx: Int? = nil, healthCheck: Bool = true)` |
-| 39 | var | public | OllamaSettings.default | `public static let `default`: OllamaSettings` |
+| 16 | struct | public | FoundationModelsProviderConfiguration | `public struct FoundationModelsProviderConfiguration` |
+| 26 | var | public | FoundationModelsProviderConfiguration.reasoningLevel | `public var reasoningLevel: FoundationModelsReasoningLevel?` |
+| 29 | func | public | FoundationModelsProviderConfiguration.init(instructions:prewarmOnInit:reasoningLevel:) | `public init(instructions: String? = nil, prewarmOnInit: Bool = false, reasoningLevel: FoundationModelsReasoningLevel? = nil)` |
+| 40 | var | public | FoundationModelsProviderConfiguration.default | `public static let default: FoundationModelsProviderConfiguration` |
+| 133 | struct | public | FoundationModelsInferenceProvider | `public struct FoundationModelsInferenceProvider` |
+| 143 | var | public | FoundationModelsInferenceProvider.isAvailable | `public static var isAvailable: Bool { get }` |
+| 152 | func | public | FoundationModelsInferenceProvider.isAvailable(_:) | `public static func isAvailable(_ model: SystemLanguageModel) -> Bool` |
+| 157 | func | public | FoundationModelsInferenceProvider.ifAvailable(configuration:profile:ownsToolLoop:model:) | `public static func ifAvailable(configuration: FoundationModelsProviderConfiguration = .default, profile: (any DynamicProfile)? = nil, ownsToolLoop: Bool = false, model: SystemLanguageModel = .default) -> FoundationModelsInferenceProvider?` |
+| 177 | func | public | FoundationModelsInferenceProvider.ifAvailable(model:configuration:profile:ownsToolLoop:) | `public static func ifAvailable(model: some LanguageModel, configuration: FoundationModelsProviderConfiguration = .default, profile: (any DynamicProfile)? = nil, ownsToolLoop: Bool = false) -> FoundationModelsInferenceProvider?` |
+| 197 | func | public | FoundationModelsInferenceProvider.isPrivateCloudComputeAvailable(_:) | `public static func isPrivateCloudComputeAvailable(_ model: PrivateCloudComputeLanguageModel = .init()) -> Bool` |
+| 208 | func | public | FoundationModelsInferenceProvider.privateCloudComputeIfAvailable(configuration:profile:ownsToolLoop:model:) | `public static func privateCloudComputeIfAvailable(configuration: FoundationModelsProviderConfiguration = .default, profile: (any DynamicProfile)? = nil, ownsToolLoop: Bool = false, model: PrivateCloudComputeLanguageModel = .init()) -> FoundationModelsInferenceProvider?` |
+| 232 | func | public | FoundationModelsInferenceProvider.init(configuration:profile:ownsToolLoop:model:) | `public init(configuration: FoundationModelsProviderConfiguration = .default, profile: (any DynamicProfile)? = nil, ownsToolLoop: Bool = false, model: SystemLanguageModel = .default)` |
+| 254 | func | public | FoundationModelsInferenceProvider.init(model:configuration:profile:ownsToolLoop:) | `public init(model: some LanguageModel, configuration: FoundationModelsProviderConfiguration = .default, profile: (any DynamicProfile)? = nil, ownsToolLoop: Bool = false)` |
+| 892 | func | public | InferenceProvider.foundationModels(configuration:model:) | `public static func foundationModels(configuration: FoundationModelsProviderConfiguration = .default, model: SystemLanguageModel = .default) -> FoundationModelsInferenceProvider` |
+| 903 | func | public | InferenceProvider.foundationModelsOwningToolLoop(configuration:model:) | `public static func foundationModelsOwningToolLoop(configuration: FoundationModelsProviderConfiguration = .default, model: SystemLanguageModel = .default) -> FoundationModelsInferenceProvider` |
+| 915 | func | public | InferenceProvider.foundationModels(instructions:prewarmOnInit:) | `public static func foundationModels(instructions: String, prewarmOnInit: Bool = false) -> FoundationModelsInferenceProvider` |
+| 928 | func | public | InferenceProvider.foundationModelsOwningToolLoop(instructions:prewarmOnInit:) | `public static func foundationModelsOwningToolLoop(instructions: String, prewarmOnInit: Bool = false) -> FoundationModelsInferenceProvider` |
+| 945 | func | public | InferenceProvider.foundationModels(profile:configuration:model:) | `public static func foundationModels(profile: some DynamicProfile, configuration: FoundationModelsProviderConfiguration = .default, model: SystemLanguageModel = .default) -> FoundationModelsInferenceProvider` |
+| 958 | func | public | InferenceProvider.foundationModelsOwningToolLoop(profile:configuration:model:) | `public static func foundationModelsOwningToolLoop(profile: some DynamicProfile, configuration: FoundationModelsProviderConfiguration = .default, model: SystemLanguageModel = .default) -> FoundationModelsInferenceProvider` |
+| 976 | func | public | InferenceProvider.foundationModels(model:configuration:profile:) | `public static func foundationModels(model: some LanguageModel, configuration: FoundationModelsProviderConfiguration = .default, profile: (any DynamicProfile)? = nil) -> FoundationModelsInferenceProvider` |
+| 990 | func | public | InferenceProvider.foundationModelsOwningToolLoop(model:configuration:profile:) | `public static func foundationModelsOwningToolLoop(model: some LanguageModel, configuration: FoundationModelsProviderConfiguration = .default, profile: (any DynamicProfile)? = nil) -> FoundationModelsInferenceProvider` |
+| 1009 | func | public | InferenceProvider.privateCloudCompute(configuration:profile:ownsToolLoop:) | `public static func privateCloudCompute(configuration: FoundationModelsProviderConfiguration = .default, profile: (any DynamicProfile)? = nil, ownsToolLoop: Bool = false) -> FoundationModelsInferenceProvider` |
+| 1026 | func | public | InferenceProvider.privateCloudComputeIfAvailable(configuration:profile:ownsToolLoop:) | `public static func privateCloudComputeIfAvailable(configuration: FoundationModelsProviderConfiguration = .default, profile: (any DynamicProfile)? = nil, ownsToolLoop: Bool = false) -> FoundationModelsInferenceProvider?` |
 
-### Providers/Conduit/OpenRouterRouting.swift
+### Providers/FoundationModels/FoundationModelsReasoningLevel.swift
 
-| Line | Kind | Access | Name | Signature |
-|------|------|--------|------|-----------|
-| 10 | struct | public | OpenRouterRouting | `public struct OpenRouterRouting` |
-| 11 | enum | public | OpenRouterRouting.Provider | `public enum Provider` |
-| 12 | case | public | OpenRouterRouting.Provider.openai | `public case openai` |
-| 13 | case | public | OpenRouterRouting.Provider.anthropic | `public case anthropic` |
-| 14 | case | public | OpenRouterRouting.Provider.google | `public case google` |
-| 15 | case | public | OpenRouterRouting.Provider.googleAIStudio | `public case googleAIStudio` |
-| 16 | case | public | OpenRouterRouting.Provider.together | `public case together` |
-| 17 | case | public | OpenRouterRouting.Provider.fireworks | `public case fireworks` |
-| 18 | case | public | OpenRouterRouting.Provider.perplexity | `public case perplexity` |
-| 19 | case | public | OpenRouterRouting.Provider.mistral | `public case mistral` |
-| 20 | case | public | OpenRouterRouting.Provider.groq | `public case groq` |
-| 21 | case | public | OpenRouterRouting.Provider.deepseek | `public case deepseek` |
-| 22 | case | public | OpenRouterRouting.Provider.cohere | `public case cohere` |
-| 23 | case | public | OpenRouterRouting.Provider.ai21 | `public case ai21` |
-| 24 | case | public | OpenRouterRouting.Provider.bedrock | `public case bedrock` |
-| 25 | case | public | OpenRouterRouting.Provider.azure | `public case azure` |
-| 28 | enum | public | OpenRouterRouting.DataCollection | `public enum DataCollection` |
-| 29 | case | public | OpenRouterRouting.DataCollection.allow | `public case allow` |
-| 30 | case | public | OpenRouterRouting.DataCollection.deny | `public case deny` |
-| 33 | var | public | OpenRouterRouting.providers | `public var providers: [OpenRouterRouting.Provider]?` |
-| 34 | var | public | OpenRouterRouting.fallbacks | `public var fallbacks: Bool` |
-| 35 | var | public | OpenRouterRouting.routeByLatency | `public var routeByLatency: Bool` |
-| 36 | var | public | OpenRouterRouting.siteURL | `public var siteURL: URL?` |
-| 37 | var | public | OpenRouterRouting.appName | `public var appName: String?` |
-| 38 | var | public | OpenRouterRouting.dataCollection | `public var dataCollection: OpenRouterRouting.DataCollection?` |
-| 40 | func | public | OpenRouterRouting.init(providers:fallbacks:routeByLatency:siteURL:appName:dataCollection:) | `public init(providers: [OpenRouterRouting.Provider]? = nil, fallbacks: Bool = true, routeByLatency: Bool = false, siteURL: URL? = nil, appName: String? = nil, dataCollection: OpenRouterRouting.DataCollection? = nil)` |
-
-### Providers/LanguageModelSession.swift
+Swarm overlay for Apple `ContextOptions.ReasoningLevel`. Not Apple's `ContextOptions` type.
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
-| 16 | func | public | LanguageModelSession.generate(prompt:options:) | `public func generate(prompt: String, options: InferenceOptions) async throws -> String` _(Availability: macOS 26.0+, watchOS 26.0+, iOS 26.0+, visionOS 26.0+, tvOS 26.0+; Requires FoundationModels (`#if canImport(FoundationModels)`))_ |
-| 38 | func | public | LanguageModelSession.stream(prompt:options:) | `public func stream(prompt: String, options _: InferenceOptions) -> AsyncThrowingStream<String, any Error>` _(Availability: macOS 26.0+, watchOS 26.0+, iOS 26.0+, visionOS 26.0+, tvOS 26.0+; Requires FoundationModels (`#if canImport(FoundationModels)`))_ |
-| 52 | func | public | LanguageModelSession.generateWithToolCalls(prompt:tools:options:) | `public func generateWithToolCalls(prompt: String, tools: [ToolSchema], options: InferenceOptions) async throws -> InferenceResponse` _(Availability: macOS 26.0+, watchOS 26.0+, iOS 26.0+, visionOS 26.0+, tvOS 26.0+; Requires FoundationModels (`#if canImport(FoundationModels)`))_ |
+| 8 | enum | public | FoundationModelsReasoningLevel | `public enum FoundationModelsReasoningLevel` |
+| 10 | case | public | FoundationModelsReasoningLevel.light | `public case light` |
+| 12 | case | public | FoundationModelsReasoningLevel.moderate | `public case moderate` |
+| 14 | case | public | FoundationModelsReasoningLevel.deep | `public case deep` |
+
+### Providers/ToolCallExecutor.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 9 | struct | public | ToolCallExecutor | `public struct ToolCallExecutor : Sendable` |
+| 15 | func | public | ToolCallExecutor.init(_:) | `public init(_ execute: @escaping @Sendable (_ name: String, _ arguments: [String : SendableValue]) async throws -> SendableValue)` |
+| 29 | func | public | ToolCallExecutor.executeTool(named:arguments:) | `public func executeTool(named name: String, arguments: [String : SendableValue]) async throws -> SendableValue` |
+
+### Providers/FoundationModels/FoundationModelsNativeTool.swift
+
+Experimental adapter wrapping a user `FoundationModels.Tool` as a Swarm `AnyJSONTool`.
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 39 | struct | public | FoundationModelsNativeTool | `public struct FoundationModelsNativeTool` |
+| 40 | var | public | FoundationModelsNativeTool.name | `public let name: String` |
+| 41 | var | public | FoundationModelsNativeTool.description | `public let description: String` |
+| 42 | var | public | FoundationModelsNativeTool.parameters | `public let parameters: [ToolParameter]` |
+| 47 | func | public | FoundationModelsNativeTool.init(_:) | `public init<T>(_ tool: T) where T : FoundationModels.Tool` |
+| 69 | func | public | FoundationModelsNativeTool.execute(arguments:) | `public func execute(arguments: [String: SendableValue]) async throws -> SendableValue` |
+
+### Providers/FoundationModels/DynamicProfile.swift
+
+Swarm capture-path types. Owned-loop consumes ``Profile`` / ``ProfileHistoryPolicy`` through an internal Apple profile bridge; these names are not `LanguageModelSession.DynamicProfile`.
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 30 | struct | public | Profile | `public struct Profile` |
+| 84 | enum | public | ProfileToolFilter | `public enum ProfileToolFilter` |
+| 106 | struct | public | ProfileGenerationOverrides | `public struct ProfileGenerationOverrides` |
+| 148 | enum | public | ProfileHistoryPolicy | `public enum ProfileHistoryPolicy` |
+| 198 | struct | public | DynamicInstructions | `public struct DynamicInstructions` |
+| 247 | protocol | public | DynamicProfile | `public protocol DynamicProfile` |
+| 253 | struct | public | StaticDynamicProfile | `public struct StaticDynamicProfile` |
+| 264 | struct | public | ClosureDynamicProfile | `public struct ClosureDynamicProfile` |
+| 291 | class | public | ProfileMode | `public final class ProfileMode<Mode>` |
+| 314 | struct | public | ModeSwitchingDynamicProfile | `public struct ModeSwitchingDynamicProfile<Mode>` |
+
+### Providers/FailoverProvider.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 39 | struct | public | FailoverProvider | `public struct FailoverProvider` |
+| 41 | var | public | FailoverProvider.primary | `public let primary: any InferenceProvider` |
+| 44 | var | public | FailoverProvider.fallbacks | `public let fallbacks: [any InferenceProvider]` |
+| 51 | var | public | FailoverProvider.shouldFailover | `public let shouldFailover: @Sendable (Error) -> Bool` |
+| 57 | var | public | FailoverProvider.onFailover | `public let onFailover: (@Sendable (Int, Error) async -> Void)?` |
+| 63 | var | public | FailoverProvider.capabilities | `public var capabilities: InferenceProviderCapabilities { get }` |
+| 68 | var | public | FailoverProvider.promptTokenCounter | `public var promptTokenCounter: (any PromptTokenCounter)? { get }` |
+| 79 | func | public | FailoverProvider.init(primary:fallbacks:shouldFailover:onFailover:) | `public init(primary: any InferenceProvider, fallbacks: [any InferenceProvider] = [], shouldFailover: @escaping @Sendable (Error) -> Bool = InferenceRetryability.isRetryable, onFailover: (@Sendable (Int, Error) async -> Void)? = nil)` |
+| 92 | func | public | FailoverProvider.generate(messages:options:) | `public func generate(messages: [InferenceMessage], options: InferenceOptions) async throws -> String` |
+| 99 | func | public | FailoverProvider.generateWithToolCalls(messages:tools:options:) | `public func generateWithToolCalls(messages: [InferenceMessage], tools: [ToolSchema], options: InferenceOptions) async throws -> InferenceResponse` |
+| 110 | func | public | FailoverProvider.generateWithToolCalls(messages:tools:options:toolExecutor:) | `public func generateWithToolCalls(messages: [InferenceMessage], tools: [ToolSchema], options: InferenceOptions, toolExecutor: ToolCallExecutor?) async throws -> InferenceResponse` |
+| 130 | func | public | FailoverProvider.generateStructured(messages:request:options:) | `public func generateStructured(messages: [InferenceMessage], request: StructuredOutputRequest, options: InferenceOptions) async throws -> StructuredOutputResult` |
 
 ### Providers/MultiProvider.swift
 
@@ -2831,11 +3107,21 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 145 | func | public | MultiProvider.setModel(_:) | `public func setModel(_ model: String)` |
 | 153 | func | public | MultiProvider.clearModel() | `public func clearModel()` |
 | 168 | func | public | MultiProvider.generate(prompt:options:) | `public func generate(prompt: String, options: InferenceOptions) async throws -> String` |
+| 257 | func | public | MultiProvider.generateStructured(messages:request:options:) | `public func generateStructured(messages: [InferenceMessage], request: StructuredOutputRequest, options: InferenceOptions) async throws -> StructuredOutputResult` |
+| 271 | func | public | MultiProvider.generateStructured(prompt:request:options:) | `public func generateStructured(prompt: String, request: StructuredOutputRequest, options: InferenceOptions) async throws -> StructuredOutputResult` |
 | 181 | func | public | MultiProvider.stream(prompt:options:) | `public nonisolated func stream(prompt: String, options: InferenceOptions) -> AsyncThrowingStream<String, any Error>` |
 | 209 | func | public | MultiProvider.generateWithToolCalls(prompt:tools:options:) | `public func generateWithToolCalls(prompt: String, tools: [ToolSchema], options: InferenceOptions) async throws -> InferenceResponse` |
 | 222 | func | public | MultiProvider.hasProvider(for:) | `public func hasProvider(for prefix: String) -> Bool` |
 | 231 | func | public | MultiProvider.provider(for:) | `public func provider(for prefix: String) -> (any InferenceProvider)?` |
 | 317 | var | public | MultiProvider.description | `public nonisolated var description: String { get }` |
+
+### Providers/TextOnlyConversationInferenceProviderAdapter.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 13 | protocol | public | TextOnlyBackend | `public protocol TextOnlyBackend : Sendable` |
+| 68 | struct | public | TextOnlyConversationInferenceProviderAdapter | `public struct TextOnlyConversationInferenceProviderAdapter` |
+| 72 | func | public | TextOnlyConversationInferenceProviderAdapter.textOnly(_:) | `public static func textOnly(_ backend: some TextOnlyBackend) -> TextOnlyConversationInferenceProviderAdapter` |
 
 ### Providers/ToolCallStreamingInferenceProvider.swift
 
@@ -2846,10 +3132,13 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 14 | case | public | InferenceStreamUpdate.toolCallPartial(_:) | `public case toolCallPartial(PartialToolCallUpdate)` |
 | 17 | case | public | InferenceStreamUpdate.toolCallsCompleted(_:) | `public case toolCallsCompleted([InferenceResponse.ParsedToolCall])` |
 | 20 | case | public | InferenceStreamUpdate.usage(_:) | `public case usage(TokenUsage)` |
-| 26 | protocol | public | ToolCallStreamingInferenceProvider | `public protocol ToolCallStreamingInferenceProvider : InferenceProvider` |
-| 28 | func | public | ToolCallStreamingInferenceProvider.streamWithToolCalls(prompt:tools:options:) | `public func streamWithToolCalls(prompt: String, tools: [ToolSchema], options: InferenceOptions) -> AsyncThrowingStream<InferenceStreamUpdate, any Error>` |
+| 23 | case | public | InferenceStreamUpdate.finishedTurn(_:) | `public case finishedTurn(InferenceResponse)` |
+| 34 | protocol | public | ToolCallStreamingInferenceProvider | `public protocol ToolCallStreamingInferenceProvider : InferenceProvider` _(Deprecated compatibility identity; Agent reads `InferenceProviderCapabilities.streamingToolCalls`.)_ |
+| 36 | func | public | ToolCallStreamingInferenceProvider.streamWithToolCalls(prompt:tools:options:) | `public func streamWithToolCalls(prompt: String, tools: [ToolSchema], options: InferenceOptions) -> AsyncThrowingStream<InferenceStreamUpdate, any Error>` |
 
 ## 12. Integration (Membrane + Wax)
+
+Integrations links on all platforms: Linux uses the portable ContextCore/Membrane backends (CPU engines, brute-force index, hash embeddings, passthrough/in-memory backends); Apple builds accelerate with Metal/CoreML/MetalANNS.
 
 ### Integration/Membrane/MembraneAgentAdapter.swift
 
@@ -2863,7 +3152,7 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 14 | var | public | MembraneFeatureConfiguration.pointerSummaryMaxChars | `public var pointerSummaryMaxChars: Int` |
 | 20 | var | public | MembraneFeatureConfiguration.runtimeFeatureFlags | `public var runtimeFeatureFlags: [String : Bool]` |
 | 22 | var | public | MembraneFeatureConfiguration.runtimeModelAllowlist | `public var runtimeModelAllowlist: [String]` |
-| 24 | func | public | MembraneFeatureConfiguration.init(jitMinToolCount:defaultJITLoadCount:pointerThresholdBytes:pointerSummaryMaxChars:runtimeFeatureFlags:runtimeModelAllowlist:) | `public init(jitMinToolCount: Int = 12, defaultJITLoadCount: Int = 6, pointerThresholdBytes: Int = 1024, pointerSummaryMaxChars: Int = 240, runtimeFeatureFlags: [String : Bool] = [:], runtimeModelAllowlist: [String] = [])` |
+| 24 | func | public | MembraneFeatureConfiguration.init(jitMinToolCount:defaultJITLoadCount:pointerThresholdBytes:pointerSummaryMaxChars:runtimeFeatureFlags:runtimeModelAllowlist:) | `public init(jitMinToolCount: Int = 12, defaultJITLoadCount: Int = 6, pointerThresholdBytes: Int = 400, pointerSummaryMaxChars: Int = 240, runtimeFeatureFlags: [String : Bool] = [:], runtimeModelAllowlist: [String] = [])` |
 | 41 | struct | public | MembraneEnvironment | `public struct MembraneEnvironment` |
 | 42 | var | public | MembraneEnvironment.isEnabled | `public var isEnabled: Bool` |
 | 43 | var | public | MembraneEnvironment.configuration | `public var configuration: MembraneFeatureConfiguration` |
@@ -2901,29 +3190,22 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
-| 5 | struct | public | SwarmEmbeddingProviderAdapter | `public struct SwarmEmbeddingProviderAdapter` |
-| 6 | var | public | SwarmEmbeddingProviderAdapter.base | `public let base: any EmbeddingProvider` |
-| 8 | func | public | SwarmEmbeddingProviderAdapter.init(_:) | `public init(_ base: any EmbeddingProvider)` |
-| 12 | var | public | SwarmEmbeddingProviderAdapter.dimensions | `public var dimensions: Int { get }` |
-| 14 | var | public | SwarmEmbeddingProviderAdapter.modelIdentifier | `public var modelIdentifier: String { get }` |
-| 18 | func | public | SwarmEmbeddingProviderAdapter.embed(_:) | `public func embed(_ text: String) async throws -> [Float]` |
-| 22 | func | public | SwarmEmbeddingProviderAdapter.embed(_:) | `public func embed(_ texts: [String]) async throws -> [[Float]]` |
-| 38 | struct | public | WaxEmbeddingProviderAdapter | `public struct WaxEmbeddingProviderAdapter` |
-| 39 | var | public | WaxEmbeddingProviderAdapter.base | `public let base: any EmbeddingProvider` |
-| 40 | var | public | WaxEmbeddingProviderAdapter.normalize | `public let normalize: Bool` |
-| 41 | var | public | WaxEmbeddingProviderAdapter.identity | `public let identity: EmbeddingIdentity?` |
-| 43 | func | public | WaxEmbeddingProviderAdapter.init(_:normalize:providerName:) | `public init(_ base: any EmbeddingProvider, normalize: Bool = false, providerName: String? = "swarm")` |
-| 58 | var | public | WaxEmbeddingProviderAdapter.dimensions | `public var dimensions: Int { get }` |
-| 60 | func | public | WaxEmbeddingProviderAdapter.embed(_:) | `public func embed(_ text: String) async throws -> [Float]` |
+| 4 | struct | public | WaxEmbeddingProviderAdapter | `public struct WaxEmbeddingProviderAdapter` |
+| 5 | var | public | WaxEmbeddingProviderAdapter.base | `public let base: any EmbeddingProvider` |
+| 6 | var | public | WaxEmbeddingProviderAdapter.normalize | `public let normalize: Bool` |
+| 7 | var | public | WaxEmbeddingProviderAdapter.identity | `public let identity: EmbeddingIdentity?` |
+| 9 | func | public | WaxEmbeddingProviderAdapter.init(_:normalize:providerName:) | `public init(_ base: any EmbeddingProvider, normalize: Bool = false, providerName: String? = "swarm")` |
+| 24 | var | public | WaxEmbeddingProviderAdapter.dimensions | `public var dimensions: Int { get }` |
+| 26 | func | public | WaxEmbeddingProviderAdapter.embed(_:) | `public func embed(_ text: String) async throws -> [Float]` |
 
 ### Integration/Wax/WaxIntegration.swift
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
-| 4 | struct | public | WaxIntegration | `public struct WaxIntegration` |
-| 5 | func | public | WaxIntegration.init() | `public init()` |
-| 8 | var | public | WaxIntegration.isEnabled | `public var isEnabled: Bool { get }` |
-| 13 | var | public | WaxIntegration.debugDescription | `public static var debugDescription: String { get }` |
+| 8 | struct | public | WaxIntegration | `@available(*, deprecated, message: "Use IntegrationsTrait.isEnabled, WaxMemory, or WaxEmbeddingProviderAdapter instead.") public struct WaxIntegration` |
+| 10 | func | public | WaxIntegration.init() | `@available(*, deprecated, message: "WaxIntegration is retained only for source compatibility.") public init()` |
+| 14 | var | public | WaxIntegration.isEnabled | `@available(*, deprecated, message: "Use IntegrationsTrait.isEnabled instead.") public var isEnabled: Bool { get }` |
+| 20 | var | public | WaxIntegration.debugDescription | `@available(*, deprecated, message: "WaxIntegration.debugDescription is retained only for source compatibility.") public static var debugDescription: String { get }` |
 
 ### Integration/Wax/WaxMemory.swift
 
@@ -2940,9 +3222,6 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | 19 | func | public | WaxMemory.Configuration.init(orchestratorConfig:queryEmbeddingPolicy:tokenEstimator:promptTitle:promptGuidance:) | `public init(orchestratorConfig: OrchestratorConfig = .default, queryEmbeddingPolicy: MemoryOrchestrator.QueryEmbeddingPolicy = .ifAvailable, tokenEstimator: any TokenEstimator = CharacterBasedTokenEstimator.shared, promptTitle: String = "Wax Memory Context (primary)", promptGuidance: String? = "Use Wax memory context as the primary source of truth. Prefer it before calling tools.")` |
 | 34 | var | public | WaxMemory.count | `public var count: Int { get }` |
 | 35 | var | public | WaxMemory.isEmpty | `public var isEmpty: Bool { get }` |
-| 37 | var | public | WaxMemory.memoryPromptTitle | `public nonisolated let memoryPromptTitle: String` |
-| 38 | var | public | WaxMemory.memoryPromptGuidance | `public nonisolated let memoryPromptGuidance: String?` |
-| 39 | var | public | WaxMemory.memoryPriority | `public nonisolated let memoryPriority: MemoryPriorityHint` |
 | 46 | func | public | WaxMemory.init(url:embedder:configuration:) | `public init(url: URL, embedder: (any EmbeddingProvider)? = nil, configuration: WaxMemory.Configuration = .default) async throws` |
 | 72 | func | public | WaxMemory.add(_:) | `public func add(_ message: MemoryMessage) async` |
 | 86 | func | public | WaxMemory.context(for:tokenLimit:) | `public func context(for query: String, tokenLimit: Int) async -> String` |
@@ -2957,28 +3236,29 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
-| 95 | macro | public | Tool(_:) | `public @attached(member, names: named(name), named(description), named(parameters), named(init), named(execute), named(_userExecute)) @attached(extension, conformances: AnyJSONTool, Sendable) macro Tool(_ description: String)` |
-| 142 | macro | public | Parameter(_:default:oneOf:) | `public @attached(peer) macro Parameter(_ description: String, default defaultValue: Any? = nil, oneOf options: [String]? = nil)` |
-| 183 | macro | public | AgentActor(instructions:generateBuilder:) | `public @attached(member, names: named(tools), named(instructions), named(configuration), named(memory), named(inferenceProvider), named(tracer), named(_memory), named(_inferenceProvider), named(_tracer), named(isCancelled), named(init), named(run), named(stream), named(cancel), named(Builder)) @attached(extension, conformances: AgentRuntime) macro AgentActor(instructions: String, generateBuilder: Bool = true)` |
-| 250 | macro | public | AgentActor(_:) | `public @attached(member, names: named(tools), named(instructions), named(configuration), named(memory), named(inferenceProvider), named(tracer), named(_memory), named(_inferenceProvider), named(_tracer), named(isCancelled), named(init), named(run), named(stream), named(cancel), named(Builder)) @attached(extension, conformances: AgentRuntime) macro AgentActor(_ instructions: String)` |
-| 281 | macro | public | Traceable() | `public @attached(peer, names: named(executeWithTracing)) macro Traceable()` |
-| 309 | macro | public | Prompt(_:) | `public @freestanding(expression) macro Prompt(_ content: String) -> PromptString` |
-| 320 | struct | public | PromptString | `public struct PromptString` |
-| 323 | var | public | PromptString.content | `public let content: String` |
-| 326 | var | public | PromptString.interpolations | `public let interpolations: [String]` |
-| 329 | var | public | PromptString.description | `public var description: String { get }` |
-| 332 | func | public | PromptString.init(content:interpolations:) | `public init(content: String, interpolations: [String] = [])` |
-| 338 | func | public | PromptString.init(stringLiteral:) | `public init(stringLiteral value: String)` |
-| 344 | func | public | PromptString.init(_:) | `public init(_ string: String)` |
-| 417 | macro | public | Builder() | `public @attached(member, names: arbitrary) macro Builder()` |
-| 423 | struct | public | PromptString.StringInterpolation | `public struct StringInterpolation` |
-| 426 | func | public | PromptString.StringInterpolation.init(literalCapacity:interpolationCount:) | `public init(literalCapacity: Int, interpolationCount: Int)` |
-| 431 | func | public | PromptString.StringInterpolation.appendLiteral(_:) | `public mutating func appendLiteral(_ literal: String)` |
-| 435 | func | public | PromptString.StringInterpolation.appendInterpolation(_:) | `public mutating func appendInterpolation(_ value: some Any)` |
-| 440 | func | public | PromptString.StringInterpolation.appendInterpolation(_:) | `public mutating func appendInterpolation(_ value: String)` |
-| 445 | func | public | PromptString.StringInterpolation.appendInterpolation(_:) | `public mutating func appendInterpolation(_ value: Int)` |
-| 450 | func | public | PromptString.StringInterpolation.appendInterpolation(_:) | `public mutating func appendInterpolation(_ value: [String])` |
-| 461 | func | public | PromptString.init(stringInterpolation:) | `public init(stringInterpolation: PromptString.StringInterpolation)` |
+| 99 | macro | public | Tool(_:) | `public @attached(member, names: named(name), named(description), named(parameters), named(init), named(execute), named(_userExecute), named(Input), named(Output)) @attached(extension, conformances: Tool, Sendable) macro Tool(_ description: String)` |
+| 146 | macro | public | Parameter(_:default:oneOf:) | `public @attached(peer) macro Parameter(_ description: String, default defaultValue: Any? = nil, oneOf options: [String]? = nil)` |
+| 188 | macro | public | AgentActor(instructions:generateBuilder:) | `public @attached(member, names: named(tools), named(instructions), named(configuration), named(memory), named(inferenceProvider), named(tracer), named(_memory), named(_defaultMemory), named(resolvedMemory), named(makeDefaultMemory), named(_inferenceProvider), named(_tracer), named(isCancelled), named(lastTokenUsage), named(init), named(run), named(stream), named(cancel), named(Builder)) @attached(extension, conformances: AgentRuntime) macro AgentActor(instructions: String, generateBuilder: Bool = true)` |
+| 256 | macro | public | AgentActor(_:) | `public @attached(member, names: named(tools), named(instructions), named(configuration), named(memory), named(inferenceProvider), named(tracer), named(_memory), named(_defaultMemory), named(resolvedMemory), named(makeDefaultMemory), named(_inferenceProvider), named(_tracer), named(isCancelled), named(lastTokenUsage), named(init), named(run), named(stream), named(cancel), named(Builder)) @attached(extension, conformances: AgentRuntime) macro AgentActor(_ instructions: String)` |
+| 287 | macro | public | Traceable() | `public @attached(peer, names: named(executeWithTracing)) macro Traceable()` |
+| 315 | macro | public | Prompt(_:) | `public @freestanding(expression) macro Prompt(_ content: String) -> PromptString` |
+| 326 | struct | public | PromptString | `public struct PromptString` |
+| 329 | var | public | PromptString.content | `public let content: String` |
+| 332 | var | public | PromptString.interpolations | `public let interpolations: [String]` |
+| 335 | var | public | PromptString.description | `public var description: String { get }` |
+| 338 | func | public | PromptString.init(content:interpolations:) | `public init(content: String, interpolations: [String] = [])` |
+| 344 | func | public | PromptString.init(stringLiteral:) | `public init(stringLiteral value: String)` |
+| 350 | func | public | PromptString.init(_:) | `public init(_ string: String)` |
+| 395 | macro | public | Tool(_:_:) | `public @freestanding(expression) macro Tool(_ name: String, _ description: String)` |
+| 465 | macro | public | Builder() | `public @attached(member, names: arbitrary) macro Builder()` |
+| 471 | struct | public | PromptString.StringInterpolation | `public struct StringInterpolation` |
+| 474 | func | public | PromptString.StringInterpolation.init(literalCapacity:interpolationCount:) | `public init(literalCapacity: Int, interpolationCount: Int)` |
+| 479 | func | public | PromptString.StringInterpolation.appendLiteral(_:) | `public mutating func appendLiteral(_ literal: String)` |
+| 483 | func | public | PromptString.StringInterpolation.appendInterpolation(_:) | `public mutating func appendInterpolation(_ value: some Any)` |
+| 488 | func | public | PromptString.StringInterpolation.appendInterpolation(_:) | `public mutating func appendInterpolation(_ value: String)` |
+| 493 | func | public | PromptString.StringInterpolation.appendInterpolation(_:) | `public mutating func appendInterpolation(_ value: Int)` |
+| 498 | func | public | PromptString.StringInterpolation.appendInterpolation(_:) | `public mutating func appendInterpolation(_ value: [String])` |
+| 509 | func | public | PromptString.init(stringInterpolation:) | `public init(stringInterpolation: PromptString.StringInterpolation)` |
 
 ## 14. Extensions
 
@@ -2987,3 +3267,375 @@ Generated from `Sources/Swarm/` on 2026-04-30.
 | Line | Kind | Access | Name | Signature |
 |------|------|--------|------|-----------|
 | 27 | var | public | Duration.timeInterval | `public var timeInterval: TimeInterval { get }` |
+
+## 14b. Voice
+
+Turn-based coordinator. VoiceSession sends text to `Agent.stream`; audio
+attachments are opt-in and capability-gated. Host-injected speech adapters
+own the microphone and speaker.
+
+### Voice/VoiceError.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 12 | enum | public | VoiceError | `public enum VoiceError: Error, Sendable, Equatable` |
+| 14 | case | public | VoiceError.busy | `public case busy` |
+| 17 | case | public | VoiceError.emptyTranscript | `public case emptyTranscript` |
+| 20 | case | public | VoiceError.notAuthorized | `public case notAuthorized(reason: String)` |
+| 23 | case | public | VoiceError.unsupportedLocale | `public case unsupportedLocale(String)` |
+| 26 | case | public | VoiceError.assetUnavailable | `public case assetUnavailable(reason: String)` |
+| 29 | case | public | VoiceError.speechFailed | `public case speechFailed(reason: String)` |
+| 32 | case | public | VoiceError.synthesisFailed | `public case synthesisFailed(reason: String)` |
+| 35 | case | public | VoiceError.agentFinishedWithoutResult | `public case agentFinishedWithoutResult` |
+| 38 | case | public | VoiceError.cancelled | `public case cancelled` |
+
+### Voice/VoiceEvent.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 9 | enum | public | VoicePhase | `public enum VoicePhase: String, Sendable, Equatable` |
+| 23 | enum | public | VoiceEvent | `public enum VoiceEvent: Sendable, Equatable` |
+| 44 | case | public | VoiceEvent.audioChunk(utterance:data:) | `case audioChunk(utterance: String, data: Data)` |
+
+### Voice/SpeechTranscript.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 13 | struct | public | SpeechTranscript | `public struct SpeechTranscript: Sendable, Equatable` |
+| 24 | func | public | SpeechTranscript.init(text:isFinal:) | `public init(text: String, isFinal: Bool)` |
+
+### Voice/VoiceSessionConfiguration.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 9 | struct | public | VoiceSessionConfiguration | `public struct VoiceSessionConfiguration: Sendable, Equatable` |
+| 36 | var | public | VoiceSessionConfiguration.default | `public static let \`default\`: VoiceSessionConfiguration` |
+| 37 | var | public | VoiceSessionConfiguration.bargeInEnabled | `public var bargeInEnabled: Bool` |
+
+### Voice/VoiceTurnResult.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 11 | struct | public | VoiceTurnResult | `public struct VoiceTurnResult: Sendable` |
+
+### Voice/SpeechToText.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 12 | protocol | public | SpeechToText | `public protocol SpeechToText: Sendable` |
+| 14 | func | public | SpeechToText.start() | `func start() -> AsyncThrowingStream<SpeechTranscript, Error>` |
+| 17 | func | public | SpeechToText.stop() | `func stop() async` |
+
+### Voice/TextToSpeech.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 9 | protocol | public | TextToSpeech | `public protocol TextToSpeech: Sendable` |
+| 11 | func | public | TextToSpeech.speak(_:) | `func speak(_ text: String) async throws` |
+| 14 | func | public | TextToSpeech.stop() | `func stop() async` |
+
+### Voice/StreamingTextToSpeech.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 19 | protocol | public | StreamingTextToSpeech | `public protocol StreamingTextToSpeech: TextToSpeech` |
+| 27 | func | public | StreamingTextToSpeech.streamAudio(_:) | `nonisolated func streamAudio(_ text: String) -> AsyncThrowingStream<Data, Error>` |
+
+### Voice/VoiceSession.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 16 | actor | public | VoiceSession | `public actor VoiceSession` |
+| 46 | func | public | VoiceSession.init(agent:speechToText:textToSpeech:session:voiceActivityDetector:configuration:) | `public init(agent: any AgentRuntime, speechToText: any SpeechToText, textToSpeech: any TextToSpeech, session: (any Session)? = nil, voiceActivityDetector: (any VoiceActivityDetector)? = nil, configuration: VoiceSessionConfiguration = .default)` |
+| 70 | func | public | VoiceSession.listenAndRespond() | `public func listenAndRespond() async throws -> VoiceTurnResult` |
+| 81 | func | public | VoiceSession.respond(to:attachments:) | `public func respond(to transcript: String, attachments: [InferenceMessage.Attachment] = []) async throws -> VoiceTurnResult` |
+| 94 | func | public | VoiceSession.stop() | `public func stop() async` |
+
+### Voice/VoiceActivityDetector.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 9 | enum | public | VoiceActivityEvent | `public enum VoiceActivityEvent: Sendable, Equatable` |
+| 19 | protocol | public | VoiceActivityDetector | `public protocol VoiceActivityDetector: Sendable` |
+
+### Voice/VoiceTurnRuntime.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 13 | struct | public | VoiceTurnRuntime | `public struct VoiceTurnRuntime: AgentRuntime` |
+| 23 | func | public | VoiceTurnRuntime.init(voice:presenting:) | `public init(voice: VoiceSession, presenting presented: any AgentRuntime)` |
+
+### Voice/HTTPSpeechToText.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 12 | struct | public | HTTPSpeechConfiguration | `public struct HTTPSpeechConfiguration: Sendable` |
+| 39 | actor | public | HTTPSpeechToText | `public actor HTTPSpeechToText: SpeechToText` |
+
+### Voice/HTTPTextToSpeech.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 12 | struct | public | HTTPSpeechSynthesisConfiguration | `public struct HTTPSpeechSynthesisConfiguration: Sendable` |
+| 39 | actor | public | HTTPTextToSpeech | `public actor HTTPTextToSpeech: TextToSpeech` |
+
+### Voice/ElevenLabsSpeechToText.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 12 | struct | public | ElevenLabsSpeechConfiguration | `public struct ElevenLabsSpeechConfiguration: Sendable` |
+| 51 | actor | public | ElevenLabsSpeechToText | `public actor ElevenLabsSpeechToText: SpeechToText` |
+
+### Voice/ElevenLabsTextToSpeech.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 12 | struct | public | ElevenLabsVoiceSettings | `public struct ElevenLabsVoiceSettings: Sendable, Equatable` |
+| 26 | struct | public | ElevenLabsSpeechSynthesisConfiguration | `public struct ElevenLabsSpeechSynthesisConfiguration: Sendable` |
+| 94 | actor | public | ElevenLabsTextToSpeech | `public actor ElevenLabsTextToSpeech: StreamingTextToSpeech` |
+| 140 | func | public | ElevenLabsTextToSpeech.streamAudio(_:) | `public nonisolated func streamAudio(_ text: String) -> AsyncThrowingStream<Data, Error>` |
+
+### Voice/AppleSpeechToText.swift
+
+Apple-only (`#if canImport(Speech)`). Linux catalog still lists the source file.
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 19 | actor | public | AppleSpeechToText | `public actor AppleSpeechToText` |
+| 29 | func | public | AppleSpeechToText.prepareForSession() | `public func prepareForSession() async throws -> Locale` |
+
+### Voice/AppleTextToSpeech.swift
+
+Apple-only (`#if canImport(AVFoundation)`).
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 17 | actor | public | AppleTextToSpeech | `public actor AppleTextToSpeech` |
+
+### Voice/VoiceSession+Apple.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 18 | func | public | VoiceSession.appleOnDevice(agent:session:locale:configuration:installAssetsIfNeeded:) | `public static func appleOnDevice(agent: any AgentRuntime, session: (any Session)? = nil, locale: Locale = .current, configuration: VoiceSessionConfiguration = .default, installAssetsIfNeeded: Bool = false) async throws -> VoiceSession` |
+
+### Voice/AppleVoiceActivityDetector.swift
+
+Apple-only (`#if canImport(Speech)`). `SpeechDetector` while speaking.
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 17 | actor | public | AppleVoiceActivityDetector | `public actor AppleVoiceActivityDetector: VoiceActivityDetector` |
+
+## 14c. Security
+
+### Security/SecretReference.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| — | struct | public | SecretReference | `public struct SecretReference` |
+| — | var | public | SecretReference.service | `public var service: String` |
+| — | var | public | SecretReference.account | `public var account: String` |
+| — | func | public | SecretReference.init(service:account:) | `public init(service: String, account: String)` |
+
+### Security/SecretStore.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| — | enum | public | SecretStoreError | `public enum SecretStoreError` |
+| — | protocol | public | SecretStore | `public protocol SecretStore` |
+| — | actor | public | InMemorySecretStore | `public actor InMemorySecretStore` |
+| — | struct | public | EnvironmentSecretStore | `public struct EnvironmentSecretStore` |
+
+### Security/KeychainSecretStore.swift
+
+Apple platforms only (`canImport(Security)`).
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| — | enum | public | KeychainAccessible | `public enum KeychainAccessible` |
+| — | actor | public | KeychainSecretStore | `public actor KeychainSecretStore` |
+| — | func | public | KeychainSecretStore.init(accessible:) | `public init(accessible: KeychainAccessible = .whenUnlockedThisDeviceOnly)` |
+
+### Security/SecretRedaction.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| — | enum | public | SecretRedaction | `public enum SecretRedaction` |
+| — | var | public | SecretRedaction.placeholder | `public static let placeholder: String` |
+| — | func | public | SecretRedaction.isSensitiveName(_:) | `public static func isSensitiveName(_ name: String) -> Bool` |
+| — | func | public | SecretRedaction.redactedSensitiveValues(_:) | `public static func redactedSensitiveValues(_ values: [String: String]) -> [String: String]` |
+| — | func | public | SecretRedaction.redactingKnownSecrets(in:secrets:) | `public static func redactingKnownSecrets(in text: String, secrets: [String?]) -> String` |
+
+## 14d. SPI: ColonyInternal
+
+System programming interface, importable as `@_spi(ColonyInternal) import Swarm`.
+Unlike the public API above, SPI carries no source-stability guarantee and may
+change in any minor release. The catalog home is `Core/SwarmColonySPI.swift`;
+two resilience initializers participate because they take a `SwarmClock`.
+
+### Core/SwarmColonySPI.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 24 | enum | spi | SwarmChatRole | `@_spi(ColonyInternal) public enum SwarmChatRole` |
+| 31 | struct | spi | SwarmToolDefinition | `@_spi(ColonyInternal) public struct SwarmToolDefinition` |
+| 43 | struct | spi | SwarmToolCall | `@_spi(ColonyInternal) public struct SwarmToolCall` |
+| 55 | enum | spi | SwarmChatMessageOp | `@_spi(ColonyInternal) public enum SwarmChatMessageOp` |
+| 60 | struct | spi | SwarmChatMessage | `@_spi(ColonyInternal) public struct SwarmChatMessage` |
+| 91 | struct | spi | SwarmChatRequest | `@_spi(ColonyInternal) public struct SwarmChatRequest` |
+| 107 | struct | spi | SwarmChatResponse | `@_spi(ColonyInternal) public struct SwarmChatResponse` |
+| 115 | enum | spi | SwarmChatStreamChunk | `@_spi(ColonyInternal) public enum SwarmChatStreamChunk` |
+| 120 | struct | spi | SwarmToolResult | `@_spi(ColonyInternal) public struct SwarmToolResult` |
+| 130 | protocol | spi | SwarmModelClient | `@_spi(ColonyInternal) public protocol SwarmModelClient` |
+| 135 | struct | spi | SwarmAnyModelClient | `@_spi(ColonyInternal) public struct SwarmAnyModelClient` |
+| 157 | func | spi | SwarmModelClient.streamFinal(_:) | `@_spi(ColonyInternal) public func streamFinal(_ request: SwarmChatRequest) async throws -> SwarmChatResponse` |
+| 173 | protocol | spi | SwarmModelRouter | `@_spi(ColonyInternal) public protocol SwarmModelRouter` |
+| 177 | protocol | spi | SwarmToolRegistry | `@_spi(ColonyInternal) public protocol SwarmToolRegistry` |
+| 182 | struct | spi | SwarmAnyToolRegistry | `@_spi(ColonyInternal) public struct SwarmAnyToolRegistry` |
+| 204 | protocol | spi | SwarmClock | `@_spi(ColonyInternal) public protocol SwarmClock` |
+| 209 | protocol | spi | SwarmLogger | `@_spi(ColonyInternal) public protocol SwarmLogger` |
+| 215 | struct | spi | SwarmInferenceHints | `@_spi(ColonyInternal) public struct SwarmInferenceHints` |
+| 253 | enum | spi | SwarmRuntimeError | `@_spi(ColonyInternal) public enum SwarmRuntimeError` |
+
+### Resilience/CircuitBreaker.swift (SPI initializer)
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 105 | func | spi | CircuitBreaker.init(name:failureThreshold:successThreshold:resetTimeout:halfOpenMaxRequests:clock:) | `@_spi(ColonyInternal) public init(name:failureThreshold:successThreshold:resetTimeout:halfOpenMaxRequests:clock:)` |
+
+### Resilience/RateLimiter.swift (SPI initializers)
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 69 | func | spi | RateLimiter.init(maxRequestsPerMinute:clock:) | `@_spi(ColonyInternal) public init(maxRequestsPerMinute:clock:)` |
+| 92 | func | spi | RateLimiter.init(maxTokens:refillRatePerSecond:clock:) | `@_spi(ColonyInternal) public init(maxTokens:refillRatePerSecond:clock:)` |
+
+## 15. Companion Products
+
+The main catalog above is generated from `Sources/Swarm/`. The package also
+exports companion products with small public entry surfaces.
+
+### SwarmOpenTelemetry
+
+Requires the **OpenTelemetry** SwiftPM trait (`traits: ["OpenTelemetry"]`).
+Without it this product is a hollow module exposing ``OpenTelemetryTrait``.
+
+#### Sources/SwarmOpenTelemetry/OpenTelemetryTrait.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 5 | enum | public | OpenTelemetryTrait | `public enum OpenTelemetryTrait` |
+| 7 | var | public | OpenTelemetryTrait.isEnabled | `public static var isEnabled: Bool { get }` |
+| 21 | func | public | OpenTelemetryTrait.requirementMessage(for:) | `public static func requirementMessage(for feature: String = "SwarmOpenTelemetry") -> String` |
+
+
+#### Sources/SwarmOpenTelemetry/OpenTelemetryInferenceProvider.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 13 | struct | public | OpenTelemetryInferenceProvider | `public struct OpenTelemetryInferenceProvider<Base: InferenceProvider>` |
+| 17 | func | public | OpenTelemetryInferenceProvider.init(_:tracer:captureContent:) | `public init(_ base: Base, tracer: any OpenTelemetryApi.Tracer = OpenTelemetry.instance.tracerProvider.get(instrumentationName: "swarm.llm", instrumentationVersion: nil), captureContent: Bool = false)` |
+| 30 | var | public | OpenTelemetryInferenceProvider.capabilities | `public var capabilities: InferenceProviderCapabilities { get }` |
+| 34 | var | public | OpenTelemetryInferenceProvider.providerName | `public var providerName: String? { get }` |
+| 38 | var | public | OpenTelemetryInferenceProvider.modelName | `public var modelName: String? { get }` |
+| 42 | var | public | OpenTelemetryInferenceProvider.endpointURL | `public var endpointURL: URL? { get }` |
+| 46 | func | public | OpenTelemetryInferenceProvider.generate(prompt:options:) | `public func generate(prompt: String, options: InferenceOptions) async throws -> String` |
+| 54 | func | public | OpenTelemetryInferenceProvider.stream(prompt:options:) | `public func stream(prompt: String, options: InferenceOptions) -> AsyncThrowingStream<String, Error>` |
+| 65 | func | public | OpenTelemetryInferenceProvider.generateWithToolCalls(prompt:tools:options:) | `public func generateWithToolCalls(prompt: String, tools: [ToolSchema], options: InferenceOptions) async throws -> InferenceResponse` |
+| 310 | func | public | InferenceProvider.instrumentedWithOpenTelemetry(tracer:captureContent:) | `public func instrumentedWithOpenTelemetry(tracer: any OpenTelemetryApi.Tracer = OpenTelemetry.instance.tracerProvider.get(instrumentationName: "swarm.llm", instrumentationVersion: nil), captureContent: Bool = false) -> some InferenceProvider` |
+
+#### Sources/SwarmOpenTelemetry/OpenTelemetryAgentRuntime.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 210 | func | public | AgentRuntime.instrumentedWithOpenTelemetry(tracer:llmTracer:spanName:captureContent:) | `public func instrumentedWithOpenTelemetry(tracer: any OpenTelemetryApi.Tracer = OpenTelemetry.instance.tracerProvider.get(instrumentationName: "swarm.agent", instrumentationVersion: nil), llmTracer: any OpenTelemetryApi.Tracer = OpenTelemetry.instance.tracerProvider.get(instrumentationName: "swarm.llm", instrumentationVersion: nil), spanName: String? = nil, captureContent: Bool = false) -> some AgentRuntime` |
+
+#### Sources/SwarmOpenTelemetry/OTLPHTTPExporterConfiguration.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 30 | struct | public | OTLPHTTPExporterConfiguration | `public struct OTLPHTTPExporterConfiguration` |
+| 32 | var | public | OTLPHTTPExporterConfiguration.defaultEndpoint | `public static let defaultEndpoint: URL` |
+| 35 | var | public | OTLPHTTPExporterConfiguration.default | `public static let \`default\`: OTLPHTTPExporterConfiguration` |
+| 72 | func | public | OTLPHTTPExporterConfiguration.init(endpoint:headers:resourceAttributes:maxBatchSize:scheduleDelay:maxRetries:retryBackoff:) | `public init(endpoint: URL = defaultEndpoint, headers: [String : String] = [:], resourceAttributes: [String : String] = ["service.name": "swarm"], maxBatchSize: Int = 64, scheduleDelay: Duration = .seconds(5), maxRetries: Int = 1, retryBackoff: Duration = .milliseconds(200))` |
+
+#### Sources/SwarmOpenTelemetry/OTLPHTTPTraceExporter.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 30 | class | public | OTLPHTTPTraceExporter | `public final class OTLPHTTPTraceExporter` |
+| 40 | func | public | OTLPHTTPTraceExporter.init(configuration:session:) | `public init(configuration: OTLPHTTPExporterConfiguration = .default, session: URLSession = .shared)` |
+| 219 | enum | public | OpenTelemetryTracing | `public enum OpenTelemetryTracing` |
+| 230 | func | public | OpenTelemetryTracing.configureOTLPHTTPExport(configuration:session:) | `public static func configureOTLPHTTPExport(configuration: OTLPHTTPExporterConfiguration = .default, session: URLSession = .shared) -> OTLPHTTPTraceExporter` |
+
+#### Sources/SwarmOpenTelemetry/OpenTelemetryTracePropagation.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 22 | enum | public | OpenTelemetryTracePropagation | `public enum OpenTelemetryTracePropagation` |
+| 24 | var | public | OpenTelemetryTracePropagation.currentHeaders | `public static var currentHeaders: [String : String] { get }` |
+| 29 | var | public | OpenTelemetryTracePropagation.current | `public static var current: TraceContextHeaders? { get }` |
+| 39 | func | public | OpenTelemetryTracePropagation.applyCurrent(to:) | `public static func applyCurrent(to request: inout URLRequest)` |
+
+#### Sources/SwarmOpenTelemetry/SwarmTypeAliases.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 6 | typealias | public | SwarmRuntimeTracer | `public typealias SwarmRuntimeTracer = Tracer` |
+
+### SwarmMembrane
+
+#### Sources/SwarmMembrane/SwarmMembrane.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 1 | export | public | SwarmMembrane | `@_exported import Swarm` |
+
+`SwarmMembrane` is a **deprecated** hollow re-export (`@_exported import Swarm`).
+Import `Swarm` instead. Its user-facing symbols are the public Membrane
+integration APIs cataloged in section 12 under
+`Sources/Swarm/Integration/Membrane/`. The product will be removed in 0.7.0.
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 8 | enum | public | SwarmMembraneProduct | `@available(*, deprecated, message: "Import Swarm instead. SwarmMembrane is a hollow re-export and will be removed in 0.7.0.") public enum SwarmMembraneProduct: Sendable` |
+
+### SwarmMCP
+
+Requires the **MCP** SwiftPM trait (`traits: ["MCP"]`). Without it this product
+is a hollow module exposing ``MCPTrait``.
+
+#### Sources/SwarmMCP/MCPTrait.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 7 | enum | public | MCPTrait | `public enum MCPTrait` |
+| 9 | var | public | MCPTrait.isEnabled | `public static var isEnabled: Bool { get }` |
+| 21 | func | public | MCPTrait.requirementMessage(for:) | `public static func requirementMessage(for feature: String = "SwarmMCP") -> String` |
+
+
+#### Sources/SwarmMCP/SwarmMCPServerService.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 6 | actor | public | SwarmMCPServerService | `public actor SwarmMCPServerService` |
+| 7 | struct | public | SwarmMCPServerService.Metrics | `public struct Metrics` |
+| 17 | func | public | SwarmMCPServerService.Metrics.init(...) | `public init(listToolsRequests: Int = 0, listedToolCount: Int = 0, callToolRequests: Int = 0, callToolSuccesses: Int = 0, callToolFailures: Int = 0, approvalRequiredCount: Int = 0, approvalRejectedCount: Int = 0, cumulativeCallToolLatencyMs: Double = 0)` |
+| 57 | func | public | SwarmMCPServerService.init(name:version:instructions:toolCatalog:toolExecutor:configuration:maxRequestsPerSecond:maxConcurrentRequests:) | `public init(name: String = "swarm-mcp-server", version: String = Swarm.version, instructions: String? = nil, toolCatalog: some SwarmMCPToolCatalog, toolExecutor: some SwarmMCPToolExecutor, configuration: Server.Configuration = .strict, maxRequestsPerSecond: Double = 10, maxConcurrentRequests: Int = 50)` |
+| 86 | func | public | SwarmMCPServerService.start(transport:initializeHook:) | `public func start(transport: any Transport, initializeHook: (@Sendable (Client.Info, Client.Capabilities) async throws -> Void)? = nil) async throws` |
+| 115 | func | public | SwarmMCPServerService.startStdio(initializeHook:) | `public func startStdio(initializeHook: (@Sendable (Client.Info, Client.Capabilities) async throws -> Void)? = nil) async throws` |
+| 123 | func | public | SwarmMCPServerService.stop() | `public func stop() async` |
+| 131 | func | public | SwarmMCPServerService.waitUntilCompleted() | `public func waitUntilCompleted() async` |
+| 136 | func | public | SwarmMCPServerService.snapshotMetrics() | `public func snapshotMetrics() -> Metrics` |
+
+#### Sources/SwarmMCP/SwarmMCPToolAdapter.swift
+
+| Line | Kind | Access | Name | Signature |
+|------|------|--------|------|-----------|
+| 5 | protocol | public | SwarmMCPToolCatalog | `public protocol SwarmMCPToolCatalog: Sendable` |
+| 11 | protocol | public | SwarmMCPToolExecutor | `public protocol SwarmMCPToolExecutor: Sendable` |
+| 17 | enum | public | SwarmMCPToolExecutionError | `public enum SwarmMCPToolExecutionError` |
+| 33 | actor | public | SwarmMCPToolRegistryAdapter | `public actor SwarmMCPToolRegistryAdapter` |
+| 36 | func | public | SwarmMCPToolRegistryAdapter.init(registry:) | `public init(registry: ToolRegistry)` |
+| 40 | func | public | SwarmMCPToolRegistryAdapter.listTools() | `public func listTools() async throws -> [ToolSchema]` |
+| 44 | func | public | SwarmMCPToolRegistryAdapter.executeTool(named:arguments:) | `public func executeTool(named toolName: String, arguments: [String: SendableValue]) async throws -> SendableValue` |

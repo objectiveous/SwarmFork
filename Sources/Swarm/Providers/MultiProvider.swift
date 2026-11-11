@@ -71,7 +71,7 @@ public enum MultiProviderError: Error, Sendable, LocalizedError, Equatable {
 ///
 /// MultiProvider is implemented as an actor, providing thread-safe access
 /// to mutable state including the provider registry and current model.
-public actor MultiProvider: InferenceProvider, ConversationInferenceProvider, CapabilityReportingInferenceProvider {
+public actor MultiProvider: InferenceProvider {
     // MARK: Public
 
     /// Returns all registered prefixes.
@@ -91,6 +91,10 @@ public actor MultiProvider: InferenceProvider, ConversationInferenceProvider, Ca
 
     nonisolated public var capabilities: InferenceProviderCapabilities {
         capabilitySnapshot.load()
+    }
+
+    nonisolated public var promptTokenCounter: (any PromptTokenCounter)? {
+        providerSnapshot.load().promptTokenCounter
     }
 
     // MARK: - Initialization
@@ -242,10 +246,39 @@ public actor MultiProvider: InferenceProvider, ConversationInferenceProvider, Ca
 
     public func generate(messages: [InferenceMessage], options: InferenceOptions) async throws -> String {
         let provider = resolveProvider(for: currentModel)
-        if let conversationProvider = provider as? any ConversationInferenceProvider {
-            return try await conversationProvider.generate(messages: messages, options: options)
-        }
-        return try await provider.generate(prompt: InferenceMessage.flattenPrompt(messages), options: options)
+        return try await provider.generate(messages: messages, options: options)
+    }
+
+    /// Routes a structured-output request to the provider selected by the current model.
+    ///
+    /// Uses the same resolve rules as ``generate(messages:options:)`` so a child
+    /// that overrides ``InferenceProvider/generateStructured(messages:request:options:)``
+    /// runs instead of the protocol prompt-fallback on `MultiProvider`.
+    public func generateStructured(
+        messages: [InferenceMessage],
+        request: StructuredOutputRequest,
+        options: InferenceOptions
+    ) async throws -> StructuredOutputResult {
+        let provider = resolveProvider(for: currentModel)
+        return try await provider.generateStructured(
+            messages: messages,
+            request: request,
+            options: options
+        )
+    }
+
+    /// Routes a flattened-prompt structured-output request to the current model provider.
+    public func generateStructured(
+        prompt: String,
+        request: StructuredOutputRequest,
+        options: InferenceOptions
+    ) async throws -> StructuredOutputResult {
+        let provider = resolveProvider(for: currentModel)
+        return try await provider.generateStructured(
+            prompt: prompt,
+            request: request,
+            options: options
+        )
     }
 
     public func generateWithToolCalls(
@@ -254,17 +287,25 @@ public actor MultiProvider: InferenceProvider, ConversationInferenceProvider, Ca
         options: InferenceOptions
     ) async throws -> InferenceResponse {
         let provider = resolveProvider(for: currentModel)
-        if let conversationProvider = provider as? any ConversationInferenceProvider {
-            return try await conversationProvider.generateWithToolCalls(
-                messages: messages,
-                tools: tools,
-                options: options
-            )
-        }
         return try await provider.generateWithToolCalls(
-            prompt: InferenceMessage.flattenPrompt(messages),
+            messages: messages,
             tools: tools,
             options: options
+        )
+    }
+
+    public func generateWithToolCalls(
+        messages: [InferenceMessage],
+        tools: [ToolSchema],
+        options: InferenceOptions,
+        toolExecutor: ToolCallExecutor?
+    ) async throws -> InferenceResponse {
+        let provider = resolveProvider(for: currentModel)
+        return try await provider.generateWithToolCalls(
+            messages: messages,
+            tools: tools,
+            options: options,
+            toolExecutor: toolExecutor
         )
     }
 
@@ -328,12 +369,7 @@ public actor MultiProvider: InferenceProvider, ConversationInferenceProvider, Ca
         options: InferenceOptions,
         continuation: AsyncThrowingStream<String, Error>.Continuation
     ) async throws {
-        let stream: AsyncThrowingStream<String, Error>
-        if let conversationProvider = provider as? any StreamingConversationInferenceProvider {
-            stream = conversationProvider.stream(messages: messages, options: options)
-        } else {
-            stream = provider.stream(prompt: InferenceMessage.flattenPrompt(messages), options: options)
-        }
+        let stream = provider.stream(messages: messages, options: options)
 
         for try await token in stream {
             try Task.checkCancellation()
@@ -350,11 +386,11 @@ public actor MultiProvider: InferenceProvider, ConversationInferenceProvider, Ca
         options: InferenceOptions,
         continuation: AsyncThrowingStream<InferenceStreamUpdate, Error>.Continuation
     ) async throws {
-        guard let streamingProvider = provider as? any ToolCallStreamingInferenceProvider else {
-            throw AgentError.generationFailed(reason: "Resolved provider does not support tool-call streaming")
-        }
-
-        for try await update in streamingProvider.streamWithToolCalls(prompt: prompt, tools: tools, options: options) {
+        for try await update in provider.streamWithToolCalls(
+            messages: [.user(prompt)],
+            tools: tools,
+            options: options
+        ) {
             try Task.checkCancellation()
             continuation.yield(update)
         }
@@ -369,18 +405,7 @@ public actor MultiProvider: InferenceProvider, ConversationInferenceProvider, Ca
         options: InferenceOptions,
         continuation: AsyncThrowingStream<InferenceStreamUpdate, Error>.Continuation
     ) async throws {
-        let stream: AsyncThrowingStream<InferenceStreamUpdate, Error>
-        if let conversationProvider = provider as? any ToolCallStreamingConversationInferenceProvider {
-            stream = conversationProvider.streamWithToolCalls(messages: messages, tools: tools, options: options)
-        } else if let promptProvider = provider as? any ToolCallStreamingInferenceProvider {
-            stream = promptProvider.streamWithToolCalls(
-                prompt: InferenceMessage.flattenPrompt(messages),
-                tools: tools,
-                options: options
-            )
-        } else {
-            throw AgentError.generationFailed(reason: "Resolved provider does not support tool-call streaming")
-        }
+        let stream = provider.streamWithToolCalls(messages: messages, tools: tools, options: options)
 
         for try await update in stream {
             try Task.checkCancellation()
@@ -450,7 +475,7 @@ public actor MultiProvider: InferenceProvider, ConversationInferenceProvider, Ca
     }
 }
 
-extension MultiProvider: StreamingConversationInferenceProvider {
+extension MultiProvider {
     nonisolated public func stream(
         messages: [InferenceMessage],
         options: InferenceOptions
@@ -479,7 +504,7 @@ extension MultiProvider: StreamingConversationInferenceProvider {
     }
 }
 
-extension MultiProvider: ToolCallStreamingInferenceProvider {
+extension MultiProvider {
     nonisolated public func streamWithToolCalls(
         prompt: String,
         tools: [ToolSchema],
@@ -510,7 +535,22 @@ extension MultiProvider: ToolCallStreamingInferenceProvider {
     }
 }
 
-extension MultiProvider: ToolCallStreamingConversationInferenceProvider {
+extension MultiProvider {
+    nonisolated public func streamWithToolCalls(
+        messages: [InferenceMessage],
+        tools: [ToolSchema],
+        options: InferenceOptions,
+        toolExecutor: ToolCallExecutor?
+    ) -> AsyncThrowingStream<InferenceStreamUpdate, Error> {
+        let provider = providerSnapshot.load()
+        return provider.streamWithToolCalls(
+            messages: messages,
+            tools: tools,
+            options: options,
+            toolExecutor: toolExecutor
+        )
+    }
+
     nonisolated public func streamWithToolCalls(
         messages: [InferenceMessage],
         tools: [ToolSchema],

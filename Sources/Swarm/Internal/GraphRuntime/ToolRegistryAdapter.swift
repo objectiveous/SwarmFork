@@ -1,3 +1,4 @@
+#if SWARM_INTEGRATIONS
 import Foundation
 import HiveCore
 
@@ -63,8 +64,11 @@ struct ToolRegistryAdapter: HiveToolRegistry, Sendable {
             switch error {
             case let .toolNotFound(name):
                 throw ToolRegistryAdapterError.toolNotFound(name: name)
-            case let .toolExecutionFailed(toolName, underlyingError):
-                throw ToolRegistryAdapterError.toolInvocationFailed(name: toolName, reason: underlyingError)
+            case let .toolFailure(toolName, message, cause):
+                throw ToolRegistryAdapterError.toolInvocationFailed(
+                    name: toolName,
+                    reason: message ?? cause.map(String.init(describing:)) ?? "unknown error"
+                )
             case let .invalidToolArguments(toolName, reason):
                 throw ToolRegistryAdapterError.toolInvocationFailed(name: toolName, reason: reason)
             default:
@@ -227,28 +231,4 @@ extension ToolRegistryAdapter {
         }
     }
 }
-
-extension SendableValue {
-    func toJSONObject() -> Any {
-        switch self {
-        case .null:
-            return NSNull()
-        case let .bool(value):
-            return value
-        case let .int(value):
-            return value
-        case let .double(value):
-            return value
-        case let .string(value):
-            return value
-        case let .array(values):
-            return values.map { $0.toJSONObject() }
-        case let .dictionary(values):
-            var result: [String: Any] = [:]
-            for (key, value) in values {
-                result[key] = value.toJSONObject()
-            }
-            return result
-        }
-    }
-}
+#endif

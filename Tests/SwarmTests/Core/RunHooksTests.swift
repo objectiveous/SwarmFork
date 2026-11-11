@@ -66,7 +66,7 @@ private actor RecordingObserver: AgentObserver {
         events.append("toolEnd:unknown") // Updating to match lack of tool name in hook
     }
 
-    func onLLMStart(context _: AgentContext?, agent _: any AgentRuntime, systemPrompt _: String?, inputMessages: [MemoryMessage]) async {
+    func onLLMStart(context _: AgentContext?, agent _: any AgentRuntime, systemPrompt _: String?, inputMessages: [InferenceMessage]) async {
         events.append("llmStart:\(inputMessages.count)")
     }
 
@@ -85,6 +85,15 @@ private actor RecordingObserver: AgentObserver {
 
     func getEvents() -> [String] {
         events
+    }
+}
+
+/// Records ``onToolEnd(context:agent:invocation:)`` so composite forwarding can be pinned.
+private actor InvocationRecordingObserver: AgentObserver {
+    var invocationNames: [String] = []
+
+    func onToolEnd(context _: AgentContext?, agent _: any AgentRuntime, invocation: ToolInvocation) async {
+        invocationNames.append(invocation.call.toolName)
     }
 }
 
@@ -107,13 +116,19 @@ struct AgentObserverDefaultImplementationTests {
         await observer.onHandoff(context: nil, fromAgent: agent, toAgent: agent)
         await observer.onToolStart(context: nil, agent: agent, call: ToolCall(toolName: "test_tool", arguments: [:]))
         await observer.onToolEnd(context: nil, agent: agent, result: ToolResult.success(callId: UUID(), output: .string("result"), duration: .seconds(1)))
-        await observer.onLLMStart(context: nil, agent: agent, systemPrompt: nil, inputMessages: [])
+        let invocation = ToolInvocation(
+            call: ToolCall(toolName: "test_tool", arguments: [:]),
+            duration: .seconds(1),
+            outcome: .success(.string("result"))
+        )
+        await observer.onToolEnd(context: nil, agent: agent, invocation: invocation)
+        await observer.onLLMStart(context: nil, agent: agent, systemPrompt: nil, inputMessages: [InferenceMessage]())
         await observer.onLLMEnd(context: nil, agent: agent, response: "response", usage: nil)
         await observer.onGuardrailTriggered(
             context: nil,
             guardrailName: "test",
             guardrailType: .input,
-            result: GuardrailResult(tripwireTriggered: false)
+            result: .passed()
         )
 
         // No assertions needed - if we get here, all methods completed successfully
@@ -243,13 +258,13 @@ struct CompositeAgentObserverTests {
         let toolCall = ToolCall(toolName: "calculator", arguments: ["x": .int(5)])
         await composite.onToolStart(context: context, agent: agent, call: toolCall)
         await composite.onToolEnd(context: context, agent: agent, result: ToolResult.success(callId: toolCall.id, output: .int(10), duration: .seconds(1)))
-        await composite.onLLMStart(context: context, agent: agent, systemPrompt: "You are helpful", inputMessages: [])
+        await composite.onLLMStart(context: context, agent: agent, systemPrompt: "You are helpful", inputMessages: [InferenceMessage]())
         await composite.onLLMEnd(context: context, agent: agent, response: "response", usage: nil)
         await composite.onGuardrailTriggered(
             context: context,
             guardrailName: "pii_filter",
             guardrailType: .output,
-            result: GuardrailResult(tripwireTriggered: true, message: "PII detected")
+            result: .tripwire(message: "PII detected")
         )
 
         // Then: All events should be recorded
@@ -263,6 +278,24 @@ struct CompositeAgentObserverTests {
         #expect(events.contains("llmStart:0"))
         #expect(events.contains("llmEnd:none"))
         #expect(events.contains("guardrail:pii_filter:output"))
+    }
+
+    @Test("CompositeObserver forwards onToolEnd(invocation:) to children")
+    func compositeForwardsToolEndInvocation() async {
+        let recorder = InvocationRecordingObserver()
+        let composite = CompositeObserver(observers: [recorder])
+        let agent = MockAgentForAgentObserver()
+        let call = ToolCall(toolName: "calculator", arguments: ["x": .int(5)])
+        let invocation = ToolInvocation(
+            call: call,
+            duration: .seconds(1),
+            outcome: .success(.int(10))
+        )
+
+        await composite.onToolEnd(context: nil, agent: agent, invocation: invocation)
+
+        let names = await recorder.invocationNames
+        #expect(names == ["calculator"])
     }
 }
 
@@ -300,7 +333,7 @@ struct LoggingAgentObserverTests {
         await observer.onError(
             context: nil,
             agent: agent,
-            error: AgentError.toolExecutionFailed(toolName: "calculator", underlyingError: "Division by zero")
+            error: AgentError.toolFailure(toolName: "calculator", message: "Division by zero", cause: nil)
         )
     }
 
@@ -331,8 +364,8 @@ struct LoggingAgentObserverTests {
         let observer = LoggingObserver()
         let agent = MockAgentForAgentObserver()
         let messages = [
-            MemoryMessage(role: .user, content: "Hello"),
-            MemoryMessage(role: .assistant, content: "Hi there!")
+            InferenceMessage.user("Hello"),
+            InferenceMessage.assistant("Hi there!")
         ]
 
         // When/Then: Should log LLM events without crashing
@@ -360,7 +393,7 @@ struct LoggingAgentObserverTests {
             context: nil,
             guardrailName: "content_filter",
             guardrailType: .input,
-            result: GuardrailResult(tripwireTriggered: true, message: "Inappropriate content detected")
+            result: .tripwire(message: "Inappropriate content detected")
         )
     }
 
@@ -398,7 +431,7 @@ struct AgentObserverIntegrationTests {
         let observer = RecordingObserver()
         let agent = MockAgentForAgentObserver()
         // removed unused tool
-        let messages = [MemoryMessage(role: .user, content: "Calculate 2+2")]
+        let messages = [InferenceMessage.user("Calculate 2+2")]
 
         // When: Simulating a full agent execution
         await observer.onAgentStart(context: nil, agent: agent, input: "Calculate 2+2")
@@ -524,7 +557,7 @@ struct AgentObserverIntegrationTests {
             func onHandoff(context _: AgentContext?, fromAgent _: any AgentRuntime, toAgent _: any AgentRuntime) async {}
             func onToolStart(context _: AgentContext?, agent _: any AgentRuntime, call _: ToolCall) async {}
             func onToolEnd(context _: AgentContext?, agent _: any AgentRuntime, result _: ToolResult) async {}
-            func onLLMStart(context _: AgentContext?, agent _: any AgentRuntime, systemPrompt _: String?, inputMessages _: [MemoryMessage]) async {}
+            func onLLMStart(context _: AgentContext?, agent _: any AgentRuntime, systemPrompt _: String?, inputMessages _: [InferenceMessage]) async {}
             func onLLMEnd(context _: AgentContext?, agent _: any AgentRuntime, response _: String, usage _: TokenUsage?) async {}
             func onGuardrailTriggered(context _: AgentContext?, guardrailName _: String, guardrailType _: GuardrailType, result _: GuardrailResult) async {}
 
@@ -613,7 +646,7 @@ struct AgentObserverEdgeCaseTests {
         // removed unused tool
 
         await observer.onToolStart(context: nil, agent: agent, call: ToolCall(toolName: "tool", arguments: [:]))
-        await observer.onLLMStart(context: nil, agent: agent, systemPrompt: nil, inputMessages: [])
+        await observer.onLLMStart(context: nil, agent: agent, systemPrompt: nil, inputMessages: [InferenceMessage]())
 
         let events = await observer.getEvents()
         #expect(events.count == 2)
@@ -624,7 +657,7 @@ struct AgentObserverEdgeCaseTests {
         let observer = RecordingObserver()
         let agent = MockAgentForAgentObserver()
 
-        await observer.onLLMStart(context: nil, agent: agent, systemPrompt: nil, inputMessages: [])
+        await observer.onLLMStart(context: nil, agent: agent, systemPrompt: nil, inputMessages: [InferenceMessage]())
         await observer.onLLMEnd(context: nil, agent: agent, response: "response", usage: nil)
 
         let events = await observer.getEvents()

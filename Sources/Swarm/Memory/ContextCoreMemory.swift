@@ -1,7 +1,10 @@
+#if SWARM_INTEGRATIONS && canImport(ContextCore)
 // ContextCoreMemory.swift
 // Swarm Framework
 //
 // ContextCore-backed memory implementation used by default in Swarm.
+// ContextCore is trait-linked on all platforms: portable CPU/hash backends
+// on Linux, Metal/CoreML acceleration on Apple.
 
 import ContextCore
 import Foundation
@@ -16,17 +19,36 @@ public struct ContextCoreMemoryConfiguration: Sendable {
     public var promptTitle: String
     public var promptGuidance: String?
     public var allowsAutomaticSessionSeeding: Bool
+    /// When `true`, the first session start calls
+    /// ``SemanticEmbeddingAvailability/ensureModelAvailable(configuration:progressHandler:)``.
+    ///
+    /// Default `false`: Swarm never downloads the MiniLM model without explicit
+    /// consent. Prefer calling `ensureModelAvailable()` yourself so progress and
+    /// errors stay in the caller's control.
+    ///
+    /// A failed auto-download is logged and does **not** block session start;
+    /// the store continues with fallback embeddings until
+    /// ``SemanticEmbeddingAvailability/ensureModelAvailable(configuration:progressHandler:)``
+    /// succeeds.
+    public var downloadsEmbeddingModelAutomatically: Bool
+    /// Delivery URL, pinned hash, and cache directory used when
+    /// ``downloadsEmbeddingModelAutomatically`` is `true`.
+    public var embeddingModelDelivery: EmbeddingModelDeliveryConfiguration
 
     public init(
         contextConfiguration: ContextCore.ContextConfiguration = .default,
         promptTitle: String = "ContextCore Memory Context (primary)",
         promptGuidance: String? = "Use ContextCore memory context as the primary working memory source.",
-        allowsAutomaticSessionSeeding: Bool = true
+        allowsAutomaticSessionSeeding: Bool = true,
+        downloadsEmbeddingModelAutomatically: Bool = false,
+        embeddingModelDelivery: EmbeddingModelDeliveryConfiguration = .default
     ) {
         self.contextConfiguration = contextConfiguration
         self.promptTitle = promptTitle
         self.promptGuidance = promptGuidance
         self.allowsAutomaticSessionSeeding = allowsAutomaticSessionSeeding
+        self.downloadsEmbeddingModelAutomatically = downloadsEmbeddingModelAutomatically
+        self.embeddingModelDelivery = embeddingModelDelivery
     }
 }
 
@@ -36,11 +58,19 @@ public struct ContextCoreMemoryConfiguration: Sendable {
 ///
 /// Swarm uses this implementation as the primary working-memory layer inside
 /// its default composite memory stack.
-public actor ContextCoreMemory: Memory, MemoryPromptDescriptor, MemorySessionLifecycle, MemorySessionImportPolicy, MemorySessionReplayAware {
+public actor ContextCoreMemory: Memory {
     public nonisolated let memoryPromptTitle: String
     public nonisolated let memoryPromptGuidance: String?
     public nonisolated let memoryPriority: MemoryPriorityHint = .primary
     public nonisolated let allowsAutomaticSessionSeeding: Bool
+
+    public nonisolated var memoryPromptMetadata: MemoryPromptMetadata? {
+        MemoryPromptMetadata(
+            title: memoryPromptTitle,
+            guidance: memoryPromptGuidance,
+            priority: memoryPriority
+        )
+    }
 
     public var count: Int {
         messages.count
@@ -51,6 +81,18 @@ public actor ContextCoreMemory: Memory, MemoryPromptDescriptor, MemorySessionLif
     }
 
     public init(configuration: ContextCoreMemoryConfiguration = .default) throws {
+        try self.init(
+            configuration: configuration,
+            endSession: { context in
+                try await context.endSession()
+            }
+        )
+    }
+
+    init(
+        configuration: ContextCoreMemoryConfiguration = .default,
+        endSession: @escaping @Sendable (ContextCore.AgentContext) async throws -> Void
+    ) throws {
         self.configuration = configuration
         self.memoryPromptTitle = configuration.promptTitle
         self.memoryPromptGuidance = configuration.promptGuidance
@@ -59,6 +101,7 @@ public actor ContextCoreMemory: Memory, MemoryPromptDescriptor, MemorySessionLif
             try ContextCore.AgentContext(configuration: configuration.contextConfiguration)
         }
         self.context = try contextFactory()
+        self.endSession = endSession
     }
 
     public func add(_ message: MemoryMessage) async {
@@ -86,11 +129,51 @@ public actor ContextCoreMemory: Memory, MemoryPromptDescriptor, MemorySessionLif
         }
     }
 
+    func promptItems(
+        for query: String,
+        tokenLimit: Int,
+        maxItems: Int,
+        maxItemTokens: Int,
+        estimate: @Sendable (String) async -> Int
+    ) async -> [MemoryPromptItem] {
+        guard tokenLimit > 0 else {
+            return []
+        }
+
+        await ensureSessionReady()
+
+        do {
+            let window = try await context.buildWindow(
+                currentTask: query,
+                maxTokens: tokenLimit
+            )
+            return window.chunks.map { chunk in
+                MemoryPromptItem(text: "[\(chunk.role.rawValue)]: \(chunk.content)")
+            }
+        } catch {
+            return await MemoryPromptAssembly.limitedFallbackItems(
+                from: messages,
+                maxItems: maxItems,
+                maxItemTokens: maxItemTokens,
+                tokenLimit: tokenLimit,
+                estimate: estimate
+            )
+        }
+    }
+
     public func allMessages() async -> [MemoryMessage] {
         messages
     }
 
     public func clear() async {
+        if sessionIsReady {
+            do {
+                try await endSession(context)
+            } catch {
+                // Best-effort shutdown. Clearing Swarm's local buffer remains authoritative.
+            }
+        }
+
         messages.removeAll()
         sessionIsReady = false
     }
@@ -105,7 +188,7 @@ public actor ContextCoreMemory: Memory, MemoryPromptDescriptor, MemorySessionLif
         }
 
         do {
-            try await context.endSession()
+            try await endSession(context)
         } catch {
             // Best-effort shutdown. The local buffer stays authoritative.
         }
@@ -122,6 +205,7 @@ public actor ContextCoreMemory: Memory, MemoryPromptDescriptor, MemorySessionLif
 
     private let configuration: ContextCoreMemoryConfiguration
     private let contextFactory: @Sendable () throws -> ContextCore.AgentContext
+    private let endSession: @Sendable (ContextCore.AgentContext) async throws -> Void
     private var context: ContextCore.AgentContext
     private var sessionIsReady = false
     private var messages: [MemoryMessage] = []
@@ -129,6 +213,22 @@ public actor ContextCoreMemory: Memory, MemoryPromptDescriptor, MemorySessionLif
     private func ensureSessionReady() async {
         guard sessionIsReady == false else {
             return
+        }
+
+        if configuration.downloadsEmbeddingModelAutomatically {
+            do {
+                try await SemanticEmbeddingAvailability.ensureModelAvailable(
+                    configuration: configuration.embeddingModelDelivery
+                )
+            } catch {
+                Log.memory.warning(
+                    """
+                    Automatic MiniLM download failed (\(error.localizedDescription)). \
+                    Starting the session with embedding fallback. Call \
+                    SemanticEmbeddingAvailability.ensureModelAvailable() to retry.
+                    """
+                )
+            }
         }
 
         do {
@@ -170,3 +270,4 @@ public actor ContextCoreMemory: Memory, MemoryPromptDescriptor, MemorySessionLif
         )
     }
 }
+#endif

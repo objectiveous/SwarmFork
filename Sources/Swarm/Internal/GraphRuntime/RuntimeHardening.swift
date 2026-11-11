@@ -1,4 +1,6 @@
-import CryptoKit
+// P2-1 grandfather: split pending; new files are gated at 1000 lines.
+// swiftlint:disable file_length
+#if SWARM_INTEGRATIONS
 import Foundation
 import HiveCore
 
@@ -634,7 +636,7 @@ enum HiveDeterminism {
     }
 
     private static func sha256Hex(_ data: Data) -> String {
-        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        SwarmSHA256.hex(data)
     }
 
     private static func diff<Value>(path: String, _ expected: Value, _ actual: Value) -> HiveDeterminismDiff {
@@ -1213,7 +1215,7 @@ private enum HiveStateSnapshotCodec {
 }
 
 private func stateSnapshotSHA256Hex(_ data: Data) -> String {
-    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    SwarmSHA256.hex(data)
 }
 
 private func hexLower(_ data: Data) -> String {
@@ -1303,3 +1305,4 @@ struct HiveTrackedThreadState: Sendable {
     var frontierCount: Int?
     var eventSchemaVersion: String?
 }
+#endif

@@ -73,6 +73,55 @@ struct SlidingWindowMemoryTests {
         #expect(tokenCount <= 200)
     }
 
+    @Test("Keep-newest eviction drops the oldest marker and retains the latest")
+    func keepNewestEvictionDropsOldestMarker() async {
+        let memory = SlidingWindowMemory(maxTokens: 100)
+
+        for index in 1 ... 40 {
+            await memory.add(.user("unique-marker-\(index)"))
+        }
+
+        let remaining = await memory.allMessages()
+        #expect(remaining.contains(where: { $0.content.contains("unique-marker-40") }))
+        #expect(remaining.contains(where: { $0.content.contains("unique-marker-1") }) == false)
+        #expect(await memory.tokenCount <= 100)
+        #expect(remaining.last?.content.contains("unique-marker-40") == true)
+    }
+
+    @Test("Concurrent adds under budget keep every message")
+    func concurrentAddsUnderBudgetKeepEveryMessage() async {
+        let memory = SlidingWindowMemory(maxTokens: 50_000)
+        let total = 40
+
+        await withTaskGroup(of: Void.self) { group in
+            for index in 1 ... total {
+                group.addTask {
+                    await memory.add(.user("concurrent-marker-\(index)"))
+                }
+            }
+        }
+
+        let remaining = await memory.allMessages()
+        #expect(remaining.count == total)
+        #expect(Set(remaining.map(\.content)).count == total)
+    }
+
+    @Test("Concurrent overflowing adds stay within the token budget")
+    func concurrentOverflowStaysWithinBudget() async {
+        let memory = SlidingWindowMemory(maxTokens: 200)
+
+        await withTaskGroup(of: Void.self) { group in
+            for index in 1 ... 40 {
+                group.addTask {
+                    await memory.add(.user("overflow-marker-\(index) with extra padding"))
+                }
+            }
+        }
+
+        #expect(await memory.count >= 1)
+        #expect(await memory.tokenCount <= 200)
+    }
+
     @Test("Keeps at least one message")
     func keepsAtLeastOneMessage() async {
         let memory = SlidingWindowMemory(maxTokens: 100)
@@ -82,6 +131,7 @@ struct SlidingWindowMemoryTests {
         await memory.add(.user(longContent))
 
         #expect(await memory.count >= 1)
+        #expect(await memory.tokenCount <= 100)
     }
 
     @Test("Near capacity flag works correctly")
@@ -124,6 +174,60 @@ struct SlidingWindowMemoryTests {
 
         // Should be capped to maxTokens
         #expect(!context.isEmpty)
+    }
+
+    @Test("Context skips oversized newest message and keeps older context")
+    func contextSkipsOversizedNewestMessage() async {
+        let memory = SlidingWindowMemory(
+            maxTokens: 200,
+            tokenEstimator: CharacterBasedTokenEstimator(charactersPerToken: 1)
+        )
+
+        await memory.add(.user("older-fit"))
+        await memory.add(.assistant("still-fits"))
+        await memory.add(.user(String(repeating: "x", count: 120)))
+
+        let context = await memory.context(for: "test", tokenLimit: 64)
+
+        #expect(context.contains("[user]: older-fit"))
+        #expect(context.contains("[assistant]: still-fits"))
+        #expect(!context.contains(String(repeating: "x", count: 120)))
+    }
+
+    @Test("Context skips oversized middle message and keeps surrounding context")
+    func contextSkipsOversizedMiddleMessage() async {
+        let memory = SlidingWindowMemory(
+            maxTokens: 300,
+            tokenEstimator: CharacterBasedTokenEstimator(charactersPerToken: 1)
+        )
+        let oversized = String(repeating: "x", count: 120)
+
+        await memory.add(.user("older-fit"))
+        await memory.add(.user(oversized))
+        await memory.add(.assistant("newer-fit"))
+
+        let context = await memory.context(for: "test", tokenLimit: 64)
+
+        #expect(context.contains("[user]: older-fit"))
+        #expect(context.contains("[assistant]: newer-fit"))
+        #expect(!context.contains(oversized))
+    }
+
+    @Test("Context stops at non-oversized message that exhausts remaining budget")
+    func contextStopsAtNonOversizedBudgetExhaustion() async {
+        let memory = SlidingWindowMemory(
+            maxTokens: 300,
+            tokenEstimator: CharacterBasedTokenEstimator(charactersPerToken: 1)
+        )
+        let fittingButTooLargeAfterNewest = String(repeating: "m", count: 40)
+
+        await memory.add(.user("older-fit"))
+        await memory.add(.user(fittingButTooLargeAfterNewest))
+        await memory.add(.assistant("new"))
+
+        let context = await memory.context(for: "test", tokenLimit: 48)
+
+        #expect(context == "[assistant]: new")
     }
 
     // MARK: - Clear Tests

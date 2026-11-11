@@ -69,8 +69,15 @@ public struct InferencePolicy: Sendable, Equatable {
     ///
     /// This limits the model's generation length, not the context window.
     /// For context window management, see ``AgentConfiguration/contextProfile``.
+    ///
+    /// Post-initialization writes are coerced like the initializer: values of
+    /// zero or less are dropped to `nil` (with a `Log.agents` warning), so a
+    /// write of `-5` reads back as `nil`.
+    ///
     /// Default: `nil`
-    public var tokenBudget: Int?
+    public var tokenBudget: Int? {
+        didSet { tokenBudget = Self.coercedTokenBudget(tokenBudget) }
+    }
 
     /// Current network state hint. Default: `.online`
     public var networkState: NetworkState
@@ -81,14 +88,79 @@ public struct InferencePolicy: Sendable, Equatable {
         tokenBudget: Int? = nil,
         networkState: NetworkState = .online
     ) {
-        if let tokenBudget, tokenBudget <= 0 {
-            Log.agents.warning("InferencePolicy: tokenBudget \(tokenBudget) must be > 0; dropping value")
-        }
         self.latencyTier = latencyTier
         self.privacyRequired = privacyRequired
-        self.tokenBudget = tokenBudget.flatMap { $0 > 0 ? $0 : nil }
+        self.tokenBudget = Self.coercedTokenBudget(tokenBudget)
         self.networkState = networkState
     }
+}
+
+// MARK: - InferencePolicy Write-Path Coercion
+
+private extension InferencePolicy {
+    /// Drops non-positive token budgets to `nil`, matching the designated
+    /// initializer; warns via ``Log/agents`` when dropped. Shared by `init`
+    /// and `didSet` so both write paths stay identical.
+    static func coercedTokenBudget(_ value: Int?) -> Int? {
+        guard let value, value > 0 else {
+            if let value {
+                Log.agents.warning("InferencePolicy: tokenBudget \(value) must be > 0; dropping value")
+            }
+            return nil
+        }
+        return value
+    }
+}
+
+// MARK: - FoundationModelsExecutionMode
+
+/// How Apple Foundation Models should run tool-calling turns.
+///
+/// Ignored. Construct ``InferenceProvider/foundationModelsOwningToolLoop()``
+/// for a provider-owned tool loop. This flag does not choose the loop.
+///
+/// - Warning: Deprecated. Remove in the next minor.
+///
+/// ## Capture vs native session
+///
+/// | | ``capture`` (default) | ``nativeSession`` (experimental) |
+/// |---|---|---|
+/// | Tool loop owner | Swarm agent loop | InferenceProvider (`LanguageModelSession`) |
+/// | Parallel tool calls | No (one captured call per turn) | Yes (Apple's session loop) |
+/// | Transcript / KV reuse | No (session rebuilt every turn) | Yes (session kept for the agent run) |
+/// | Token streaming with tools | No | Yes (`Agent.stream` yields incremental tokens) |
+/// | Per-iteration memory injection | Yes | **No** — memory is injected when the native session starts |
+/// | Swarm `maxIterations` cap | Yes | **No** — Apple owns the inner loop |
+/// | Mid-loop checkpoints | Yes | **No** |
+/// | Per-turn guardrail interception | Yes (wraps Swarm's loop) | **No** — input/tool guardrails run **inside** each tool body |
+///
+/// - Experiment: Native session mode may change in a minor release. Capture remains
+///   the supported default because Swarm-side control (guardrails, checkpoints,
+///   memory injection) is the framework's differentiator.
+///
+/// ```swift
+/// let agent = try Agent(
+///     "Be helpful.",
+///     inferenceProvider: .foundationModelsOwningToolLoop()
+/// ) {
+///     WeatherTool()
+/// }
+/// ```
+@available(*, deprecated, message: "Choose a provider-owned tool loop by constructing the InferenceProvider adapter (.foundationModelsOwningToolLoop()). This flag is ignored.")
+public enum FoundationModelsExecutionMode: String, Sendable, Equatable {
+    /// Swarm owns the tool loop. Foundation Models tools throw a capture error so
+    /// Swarm can execute tools with guardrails, observers, retries, and
+    /// per-iteration memory injection. This is the default.
+    case capture
+
+    /// Let the Foundation Models adapter run a provider-owned tool loop on a
+    /// persistent `LanguageModelSession`.
+    ///
+    /// - Experiment: Opt-in. Unlocks parallel tool calls, transcript/KV reuse, and
+    ///   real token streaming with tools. Loses per-iteration memory injection,
+    ///   Swarm-side max-iteration caps, mid-loop checkpoints, and per-turn
+    ///   guardrail interception (guardrails move inside tool bodies).
+    case nativeSession
 }
 
 // MARK: - AgentConfiguration
@@ -147,11 +219,22 @@ public struct InferencePolicy: Sendable, Equatable {
 /// - ``previousResponseId(_:)`` - Set response continuation
 /// - ``autoPreviousResponseId(_:)`` - Set auto response tracking
 /// - ``defaultTracingEnabled(_:)`` - Set default tracing
+/// - ``autoAttachMetricsCollector(_:)`` - Auto-attach a ``MetricsCollector``
+/// - ``foundationModelsExecution(_:)`` - Set Foundation Models execution mode (experimental)
+/// - ``resilience(_:)`` - Set retry, circuit-breaker, and rate-limit policies for inference
 ///
 /// ## Thread Safety
 ///
 /// `AgentConfiguration` is a value type (`struct`) and is `Sendable`, making it
 /// safe to pass across concurrency boundaries.
+///
+/// ## Post-Initialization Writes
+///
+/// ``maxIterations``, ``timeout``, and ``temperature`` are mutation-proofed:
+/// `didSet` observers coerce any write with the exact same rules (and
+/// ``Log/agents`` warnings) as the designated initializer, so e.g.
+/// `config.maxIterations = 0` reads back as `1`. Property setters cannot
+/// throw, which is why invalid values are coerced rather than rejected.
 public struct AgentConfiguration: Sendable, Equatable {
     // MARK: - Default Configuration
 
@@ -183,17 +266,47 @@ public struct AgentConfiguration: Sendable, Equatable {
 
     /// Maximum number of reasoning iterations before stopping.
     /// Default: 10
-    public var maxIterations: Int
+    ///
+    /// Post-initialization writes are coerced like the initializer: values
+    /// below 1 self-correct to 1 (with a `Log.agents` warning), so a write of
+    /// `0` reads back as `1`.
+    public var maxIterations: Int {
+        didSet { maxIterations = Self.coercedMaxIterations(maxIterations) }
+    }
+
+    /// Consecutive identical tool-call batches before the run stops.
+    /// Default: 3
+    ///
+    /// When the model produces this many identical batches in a row, the
+    /// run throws ``AgentError/toolCallLoopDetected(toolNames:repetitions:)``
+    /// instead of burning the remaining iteration budget.
+    ///
+    /// Post-initialization writes are coerced like the initializer: values
+    /// below 2 self-correct to 2 (with a `Log.agents` warning), since a
+    /// single batch can never constitute a loop.
+    public var maxConsecutiveToolRepeats: Int {
+        didSet { maxConsecutiveToolRepeats = Self.coercedMaxConsecutiveToolRepeats(maxConsecutiveToolRepeats) }
+    }
 
     /// Maximum time allowed for the entire execution.
     /// Default: 60 seconds
-    public var timeout: Duration
+    ///
+    /// Post-initialization writes are coerced like the initializer: non-positive
+    /// durations fall back to the 60-second default (with a `Log.agents` warning).
+    public var timeout: Duration {
+        didSet { timeout = Self.coercedTimeout(timeout) }
+    }
 
     // MARK: - Model Settings
 
     /// Temperature for model generation (0.0 = deterministic, 2.0 = creative).
     /// Default: 1.0
-    public var temperature: Double
+    ///
+    /// Post-initialization writes are coerced like the initializer: non-finite
+    /// or out-of-range values fall back to 1.0 (with a `Log.agents` warning).
+    public var temperature: Double {
+        didSet { temperature = Self.coercedTemperature(temperature) }
+    }
 
     /// Maximum tokens to generate per response.
     /// Default: nil (model default)
@@ -539,6 +652,61 @@ public struct AgentConfiguration: Sendable, Equatable {
     ///   ``SwiftLogTracer``
     public var defaultTracingEnabled: Bool
 
+    /// Whether to auto-attach a ``MetricsCollector`` so execution metrics flow
+    /// without passing a tracer manually.
+    ///
+    /// When `true`, ``Agent`` creates a ``MetricsCollector`` at initialization
+    /// (or when this flag is enabled via ``Agent/withConfiguration(_:)``) and
+    /// composes it into the tracer chain. Read snapshots from
+    /// ``Agent/metricsCollector``.
+    ///
+    /// Default: `false` — metrics collection stays opt-in.
+    ///
+    /// ## Example
+    /// ```swift
+    /// let config = AgentConfiguration.default
+    ///     .autoAttachMetricsCollector(true)
+    /// let agent = try Agent("Be helpful.", configuration: config,
+    ///     inferenceProvider: provider)
+    /// _ = try await agent.run("Hello")
+    /// let snapshot = await agent.metricsCollector?.snapshot()
+    /// ```
+    ///
+    /// - SeeAlso: ``autoAttachMetricsCollector(_:)``, ``MetricsCollector``,
+    ///   ``Agent/metricsCollector``
+    public var autoAttachMetricsCollector: Bool
+
+    // MARK: - Foundation Models Execution
+
+    /// Ignored. Construct a provider-owned tool loop adapter instead of setting this flag.
+    ///
+    /// Default: ``FoundationModelsExecutionMode/capture``.
+    ///
+    /// - SeeAlso: ``InferenceProvider/foundationModelsOwningToolLoop()``
+    @available(*, deprecated, message: "Choose a provider-owned tool loop by constructing the InferenceProvider adapter. This flag is ignored.")
+    public var foundationModelsExecution: FoundationModelsExecutionMode {
+        get { FoundationModelsExecutionMode(rawValue: legacyFoundationModelsExecution) ?? .capture }
+        set { legacyFoundationModelsExecution = newValue.rawValue }
+    }
+
+    private var legacyFoundationModelsExecution = "capture"
+
+    // MARK: - Resilience Settings
+
+    /// Retry, circuit-breaker, and rate-limit policies for **provider inference**.
+    ///
+    /// Default: ``ResilienceConfiguration/disabled`` (``RetryPolicy/noRetry``, no
+    /// breaker, no limiter). That default is a no-op — agent execution matches
+    /// Swarm before this field existed.
+    ///
+    /// Policies wrap provider inference only. Tool execution is never retried.
+    /// Retries consume the remaining ``timeout`` budget and cannot outlive the
+    /// run. Circuit-breaker and rate-limiter state is scoped per ``Agent``
+    /// instance. See ``ResilienceConfiguration`` and ``InferenceRetryability``.
+    ///
+    /// - SeeAlso: ``resilience(_:)``, ``ResilienceConfiguration``
+    public var resilience: ResilienceConfiguration
+
     // MARK: - Initialization
 
     /// Creates a new agent configuration.
@@ -562,9 +730,12 @@ public struct AgentConfiguration: Sendable, Equatable {
     ///   - previousResponseId: Previous response ID for continuation. Default: nil
     ///   - autoPreviousResponseId: Enable auto response ID tracking. Default: false
     ///   - defaultTracingEnabled: Enable default tracing when no tracer configured. Default: true
+    ///   - autoAttachMetricsCollector: Auto-attach a ``MetricsCollector``. Default: false
+    ///   - resilience: Retry / circuit-breaker / rate-limit policies for inference. Default: ``ResilienceConfiguration/disabled``
     public init(
         name: String = "Agent",
         maxIterations: Int = 10,
+        maxConsecutiveToolRepeats: Int = 3,
         timeout: Duration = .seconds(60),
         temperature: Double = 1.0,
         maxTokens: Int? = nil,
@@ -581,21 +752,15 @@ public struct AgentConfiguration: Sendable, Equatable {
         parallelToolCalls: Bool = false,
         previousResponseId: String? = nil,
         autoPreviousResponseId: Bool = false,
-        defaultTracingEnabled: Bool = true
+        defaultTracingEnabled: Bool = true,
+        autoAttachMetricsCollector: Bool = false,
+        resilience: ResilienceConfiguration = .disabled
     ) {
-        if maxIterations < 1 {
-            Log.agents.warning("AgentConfiguration: maxIterations \(maxIterations) must be >= 1; using 1")
-        }
-        if timeout <= .zero {
-            Log.agents.warning("AgentConfiguration: timeout must be positive; using default 60 seconds")
-        }
-        if !temperature.isFinite || !(0.0 ... 2.0).contains(temperature) {
-            Log.agents.warning("AgentConfiguration: temperature \(temperature) out of [0.0, 2.0]; using default 1.0")
-        }
         self.name = name
-        self.maxIterations = max(1, maxIterations)
-        self.timeout = timeout > .zero ? timeout : .seconds(60)
-        self.temperature = (temperature.isFinite && (0.0 ... 2.0).contains(temperature)) ? temperature : 1.0
+        self.maxIterations = Self.coercedMaxIterations(maxIterations)
+        self.maxConsecutiveToolRepeats = Self.coercedMaxConsecutiveToolRepeats(maxConsecutiveToolRepeats)
+        self.timeout = Self.coercedTimeout(timeout)
+        self.temperature = Self.coercedTemperature(temperature)
         self.maxTokens = maxTokens
         self.stopSequences = stopSequences
         self.modelSettings = modelSettings
@@ -612,503 +777,102 @@ public struct AgentConfiguration: Sendable, Equatable {
         self.previousResponseId = previousResponseId
         self.autoPreviousResponseId = autoPreviousResponseId
         self.defaultTracingEnabled = defaultTracingEnabled
+        self.autoAttachMetricsCollector = autoAttachMetricsCollector
+        self.resilience = resilience
+    }
+
+    /// Compatibility initializer for the ignored Foundation Models execution flag.
+    /// New callers select provider-owned execution on their inference provider.
+    @available(*, deprecated, message: "Construct a provider-owned inference adapter instead of passing foundationModelsExecution; this flag is ignored.")
+    public init(
+        name: String = "Agent",
+        maxIterations: Int = 10,
+        maxConsecutiveToolRepeats: Int = 3,
+        timeout: Duration = .seconds(60),
+        temperature: Double = 1.0,
+        maxTokens: Int? = nil,
+        stopSequences: [String] = [],
+        modelSettings: ModelSettings? = nil,
+        contextProfile: ContextProfile = .platformDefault,
+        inferencePolicy: InferencePolicy? = nil,
+        enableStreaming: Bool = true,
+        includeToolCallDetails: Bool = true,
+        stopOnToolError: Bool = false,
+        includeReasoning: Bool = true,
+        sessionHistoryLimit: Int? = 50,
+        contextMode: ContextMode = .adaptive,
+        parallelToolCalls: Bool = false,
+        previousResponseId: String? = nil,
+        autoPreviousResponseId: Bool = false,
+        defaultTracingEnabled: Bool = true,
+        autoAttachMetricsCollector: Bool = false,
+        foundationModelsExecution: FoundationModelsExecutionMode,
+        resilience: ResilienceConfiguration = .disabled
+    ) {
+        self.init(
+            name: name,
+            maxIterations: maxIterations,
+            maxConsecutiveToolRepeats: maxConsecutiveToolRepeats,
+            timeout: timeout,
+            temperature: temperature,
+            maxTokens: maxTokens,
+            stopSequences: stopSequences,
+            modelSettings: modelSettings,
+            contextProfile: contextProfile,
+            inferencePolicy: inferencePolicy,
+            enableStreaming: enableStreaming,
+            includeToolCallDetails: includeToolCallDetails,
+            stopOnToolError: stopOnToolError,
+            includeReasoning: includeReasoning,
+            sessionHistoryLimit: sessionHistoryLimit,
+            contextMode: contextMode,
+            parallelToolCalls: parallelToolCalls,
+            previousResponseId: previousResponseId,
+            autoPreviousResponseId: autoPreviousResponseId,
+            defaultTracingEnabled: defaultTracingEnabled,
+            autoAttachMetricsCollector: autoAttachMetricsCollector,
+            resilience: resilience
+        )
+        legacyFoundationModelsExecution = foundationModelsExecution.rawValue
     }
 }
 
-// MARK: - Builder Modifier Methods
+// MARK: - Write-Path Coercion
 
-extension AgentConfiguration {
-    // MARK: Identity
-
-    /// Sets the name of the agent for identification and logging.
-    ///
-    /// The name is used in log messages, debug output, and tracing to identify
-    /// which agent is executing. Choose descriptive names for better observability
-    /// when running multiple agents.
-    ///
-    /// Default: "Agent"
-    ///
-    /// ## Example
-    /// ```swift
-    /// let config = AgentConfiguration.default
-    ///     .name("WeatherAssistant")
-    /// ```
-    ///
-    /// - Parameter value: The agent name for identification
-    /// - Returns: A new configuration with the updated name
-    /// - SeeAlso: ``name``
-    @discardableResult public func name(_ value: String) -> AgentConfiguration {
-        var copy = self
-        copy.name = value
-        return copy
+private extension AgentConfiguration {
+    /// Coerces `maxIterations` to at least 1, matching the designated
+    /// initializer; warns via ``Log/agents`` when clamping occurs. Shared by
+    /// `init` and `didSet` so both write paths stay identical.
+    static func coercedMaxIterations(_ value: Int) -> Int {
+        guard value < 1 else { return value }
+        Log.agents.warning("AgentConfiguration: maxIterations \(value) must be >= 1; using 1")
+        return max(1, value)
     }
 
-    // MARK: Iteration Limits
-
-    /// Sets the maximum number of reasoning iterations before stopping.
-    ///
-    /// Prevents infinite loops by limiting how many times the agent can
-    /// call tools and receive responses. When the limit is reached,
-    /// ``AgentError/maxIterationsExceeded(iterations:)`` is thrown.
-    ///
-    /// Each iteration consists of:
-    /// 1. Sending the current context to the model
-    /// 2. Receiving the model's response
-    /// 3. Executing any requested tool calls
-    /// 4. Adding results to the context
-    ///
-    /// Default: 10
-    ///
-    /// ## Example
-    /// ```swift
-    /// let config = AgentConfiguration.default
-    ///     .maxIterations(20)  // Allow more iterations for complex tasks
-    /// ```
-    ///
-    /// - Parameter value: Maximum reasoning iterations (must be >= 1)
-    /// - Returns: A new configuration with the updated iteration limit
-    /// - SeeAlso: ``maxIterations``, ``timeout(_:)``, ``stopOnToolError(_:)``
-    @discardableResult public func maxIterations(_ value: Int) -> AgentConfiguration {
-        var copy = self
-        copy.maxIterations = value
-        return copy
+    static func coercedMaxConsecutiveToolRepeats(_ value: Int) -> Int {
+        guard value < 2 else { return value }
+        Log.agents.warning("AgentConfiguration: maxConsecutiveToolRepeats \(value) must be >= 2; using 2")
+        return max(2, value)
     }
 
-    /// Sets the maximum time allowed for the entire execution.
-    ///
-    /// If execution exceeds this duration, ``AgentError/executionTimeout``
-    /// is thrown and the agent stops processing. This includes time spent
-    /// on model inference and tool execution.
-    ///
-    /// ## Use Cases
-    /// - Prevent long-running tasks from hanging
-    /// - Enforce SLA requirements
-    /// - Control costs in pay-per-use environments
-    ///
-    /// Default: 60 seconds
-    ///
-    /// ## Example
-    /// ```swift
-    /// // Quick responses for interactive use
-    /// let quickConfig = AgentConfiguration.default
-    ///     .timeout(.seconds(10))
-    ///
-    /// // Longer timeout for complex analysis
-    /// let analysisConfig = AgentConfiguration.default
-    ///     .timeout(.minutes(5))
-    /// ```
-    ///
-    /// - Parameter value: Maximum execution time
-    /// - Returns: A new configuration with the updated timeout
-    /// - SeeAlso: ``timeout``, ``maxIterations(_:)``
-    @discardableResult public func timeout(_ value: Duration) -> AgentConfiguration {
-        var copy = self
-        copy.timeout = value
-        return copy
+    /// Falls back to the 60-second default for non-positive timeouts, matching
+    /// the designated initializer; warns via ``Log/agents`` when replaced.
+    static func coercedTimeout(_ value: Duration) -> Duration {
+        guard value <= .zero else { return value }
+        Log.agents.warning("AgentConfiguration: timeout must be positive; using default 60 seconds")
+        return .seconds(60)
     }
 
-    // MARK: Model Settings
-
-    /// Sets the temperature for model generation.
-    ///
-    /// Controls the randomness/creativity of the model's output:
-    /// - `0.0`: Deterministic, always picks the most likely token
-    /// - `0.7`: Balanced, some creativity while staying focused
-    /// - `1.0`: Default, moderate creativity
-    /// - `2.0`: Maximum creativity, more varied outputs
-    ///
-    /// ## When to Adjust
-    /// - Lower for: code generation, factual queries, structured output
-    /// - Higher for: creative writing, brainstorming, diverse suggestions
-    ///
-    /// Default: 1.0
-    ///
-    /// ## Example
-    /// ```swift
-    /// // Creative writing
-    /// let creativeConfig = AgentConfiguration.default
-    ///     .temperature(1.2)
-    ///
-    /// // Precise code generation
-    /// let codeConfig = AgentConfiguration.default
-    ///     .temperature(0.2)
-    /// ```
-    ///
-    /// - Parameter value: Temperature between 0.0 and 2.0
-    /// - Returns: A new configuration with the updated temperature
-    /// - SeeAlso: ``temperature``, ``maxTokens(_:)``, ``modelSettings(_:)``
-    @discardableResult public func temperature(_ value: Double) -> AgentConfiguration {
-        var copy = self
-        copy.temperature = value
-        return copy
-    }
-
-    /// Sets the maximum tokens to generate per response.
-    ///
-    /// Limits the length of the model's output. This is useful for:
-    /// - Controlling costs in token-based pricing
-    /// - Preventing overly long responses
-    /// - Ensuring responses fit within display constraints
-    ///
-    /// Note: This limits output length, not the context window. For context
-    /// management, see ``contextProfile(_:)``.
-    ///
-    /// Default: nil (model default)
-    ///
-    /// ## Example
-    /// ```swift
-    /// let config = AgentConfiguration.default
-    ///     .maxTokens(500)  // Keep responses concise
-    /// ```
-    ///
-    /// - Parameter value: Maximum tokens per response, or nil for model default
-    /// - Returns: A new configuration with the updated token limit
-    /// - SeeAlso: ``maxTokens``, ``temperature(_:)``, ``contextProfile(_:)``
-    @discardableResult public func maxTokens(_ value: Int?) -> AgentConfiguration {
-        var copy = self
-        copy.maxTokens = value
-        return copy
-    }
-
-    /// Sets the sequences that will stop generation when encountered.
-    ///
-    /// When the model generates any of these sequences, it stops immediately
-    /// and returns the response up to that point. This is useful for:
-    /// - Stopping at natural boundaries ("END", "STOP")
-    /// - Preventing runaway generation
-    /// - Integrating with parsing pipelines
-    ///
-    /// Default: empty
-    ///
-    /// ## Example
-    /// ```swift
-    /// let config = AgentConfiguration.default
-    ///     .stopSequences(["END", "<|end|>"])
-    /// ```
-    ///
-    /// - Parameter value: Array of stop sequences
-    /// - Returns: A new configuration with the updated stop sequences
-    /// - SeeAlso: ``stopSequences``
-    @discardableResult public func stopSequences(_ value: [String]) -> AgentConfiguration {
-        var copy = self
-        copy.stopSequences = value
-        return copy
-    }
-
-    /// Sets extended model settings for fine-grained control.
-    ///
-    /// When set, values in `modelSettings` take precedence over individual
-    /// properties like `temperature`, `maxTokens`, and `stopSequences`.
-    /// This enables advanced configuration options not exposed as top-level
-    /// properties.
-    ///
-    /// ## Example
-    /// ```swift
-    /// let config = AgentConfiguration.default
-    ///     .modelSettings(ModelSettings.creative
-    ///         .toolChoice(.required)
-    ///         .parallelToolCalls(true)
-    ///     )
-    /// ```
-    ///
-    /// - Parameter value: Extended model settings, or nil to use individual properties
-    /// - Returns: A new configuration with the updated model settings
-    /// - SeeAlso: ``modelSettings``, ``temperature(_:)``, ``maxTokens(_:)``
-    @discardableResult public func modelSettings(_ value: ModelSettings?) -> AgentConfiguration {
-        var copy = self
-        copy.modelSettings = value
-        return copy
-    }
-
-    // MARK: Context Settings
-
-    /// Sets the context budgeting profile for long-running workflows.
-    ///
-    /// Controls how the agent manages the context window as conversations
-    /// grow long. Different profiles optimize for different use cases:
-    /// - ``ContextProfile/platformDefault``: Automatic platform-optimized settings
-    /// - ``ContextProfile/strict4k``: Hard 4K token limit
-    /// - ``ContextProfile/custom(_:)``: Custom truncation strategy
-    ///
-    /// Default: `.platformDefault`
-    ///
-    /// ## Example
-    /// ```swift
-    /// let config = AgentConfiguration.default
-    ///     .contextProfile(.strict4k)
-    /// ```
-    ///
-    /// - Parameter value: The context budgeting profile
-    /// - Returns: A new configuration with the updated context profile
-    /// - SeeAlso: ``contextProfile``, ``contextMode(_:)``
-    @discardableResult public func contextProfile(_ value: ContextProfile) -> AgentConfiguration {
-        var copy = self
-        copy.contextProfile = value
-        return copy
-    }
-
-    /// Sets the context envelope mode for prompt construction.
-    ///
-    /// Controls how the context window is managed:
-    /// - ``ContextMode/adaptive``: Uses the configured `contextProfile`
-    /// - ``ContextMode/strict4k``: Forces `ContextProfile.strict4k` regardless of profile
-    ///
-    /// Default: `.adaptive`
-    ///
-    /// ## Example
-    /// ```swift
-    /// let config = AgentConfiguration.default
-    ///     .contextMode(.strict4k)
-    /// ```
-    ///
-    /// - Parameter value: The context envelope mode
-    /// - Returns: A new configuration with the updated context mode
-    /// - SeeAlso: ``contextMode``, ``contextProfile(_:)``
-    @discardableResult public func contextMode(_ value: ContextMode) -> AgentConfiguration {
-        var copy = self
-        copy.contextMode = value
-        return copy
-    }
-
-    // MARK: Graph Runtime Settings
-
-    /// Sets the inference routing policy hints.
-    ///
-    /// Controls model selection when multiple backends are available.
-    /// Use this to specify latency requirements, privacy constraints,
-    /// token budgets, and network state preferences.
-    ///
-    /// ## Example
-    /// ```swift
-    /// let policy = InferencePolicy(
-    ///     latencyTier: .interactive,
-    ///     privacyRequired: true,
-    ///     tokenBudget: 500
-    /// )
-    /// let config = AgentConfiguration.default
-    ///     .inferencePolicy(policy)
-    /// ```
-    ///
-    /// - Parameter value: Inference routing policy, or nil for default routing
-    /// - Returns: A new configuration with the updated inference policy
-    /// - SeeAlso: ``inferencePolicy``, ``InferencePolicy``
-    @discardableResult public func inferencePolicy(_ value: InferencePolicy?) -> AgentConfiguration {
-        var copy = self
-        copy.inferencePolicy = value
-        return copy
-    }
-
-    // MARK: Behavior Settings
-
-    /// Sets whether to stream responses as they're generated.
-    ///
-    /// When enabled, the agent delivers response content incrementally through
-    /// ``AgentEvent/responseChunk(_:)`` events. This provides better perceived
-    /// performance and allows real-time UI updates.
-    ///
-    /// Default: true
-    ///
-    /// ## Example
-    /// ```swift
-    /// // Non-streaming for batch processing
-    /// let batchConfig = AgentConfiguration.default
-    ///     .enableStreaming(false)
-    /// ```
-    ///
-    /// - Parameter value: true to enable streaming, false for complete responses
-    /// - Returns: A new configuration with the updated streaming setting
-    /// - SeeAlso: ``enableStreaming``, ``AgentEvent/responseChunk(_:)``
-    @discardableResult public func enableStreaming(_ value: Bool) -> AgentConfiguration {
-        var copy = self
-        copy.enableStreaming = value
-        return copy
-    }
-
-    /// Sets whether to include detailed tool call information in the result.
-    ///
-    /// When enabled, ``ToolCallDetail`` objects are included in the
-    /// ``AgentResponse/toolCalls`` array, showing which tools were called,
-    /// with what arguments, and their results.
-    ///
-    /// Default: true
-    ///
-    /// ## Example
-    /// ```swift
-    /// let config = AgentConfiguration.default
-    ///     .includeToolCallDetails(true)
-    /// ```
-    ///
-    /// - Parameter value: true to include tool call details
-    /// - Returns: A new configuration with the updated setting
-    /// - SeeAlso: ``includeToolCallDetails``, ``ToolCallDetail``
-    @discardableResult public func includeToolCallDetails(_ value: Bool) -> AgentConfiguration {
-        var copy = self
-        copy.includeToolCallDetails = value
-        return copy
-    }
-
-    /// Sets whether to stop execution after the first tool error.
-    ///
-    /// When `true`, if any tool call throws an error, execution immediately
-    /// stops and the error is propagated. When `false`, errors are captured
-    /// and execution continues.
-    ///
-    /// Default: false
-    ///
-    /// ## Example
-    /// ```swift
-    /// // Strict mode - fail fast
-    /// let strictConfig = AgentConfiguration.default
-    ///     .stopOnToolError(true)
-    /// ```
-    ///
-    /// - Parameter value: true to stop on first tool error
-    /// - Returns: A new configuration with the updated error handling setting
-    /// - SeeAlso: ``stopOnToolError``, ``ToolCallDetail/error``
-    @discardableResult public func stopOnToolError(_ value: Bool) -> AgentConfiguration {
-        var copy = self
-        copy.stopOnToolError = value
-        return copy
-    }
-
-    /// Sets whether to include the agent's reasoning in events.
-    ///
-    /// When enabled, the agent emits ``AgentEvent/reasoning(_:)`` events
-    /// containing its chain-of-thought or reasoning process.
-    ///
-    /// Default: true
-    ///
-    /// ## Example
-    /// ```swift
-    /// let config = AgentConfiguration.default
-    ///     .includeReasoning(true)
-    /// ```
-    ///
-    /// - Parameter value: true to include reasoning events
-    /// - Returns: A new configuration with the updated reasoning setting
-    /// - SeeAlso: ``includeReasoning``, ``AgentEvent/reasoning(_:)``
-    @discardableResult public func includeReasoning(_ value: Bool) -> AgentConfiguration {
-        var copy = self
-        copy.includeReasoning = value
-        return copy
-    }
-
-    // MARK: Session Settings
-
-    /// Sets the maximum number of session history messages to load.
-    ///
-    /// Controls how many recent messages are loaded when a ``ConversationSession``
-    /// is provided. Set to `nil` to load all messages (use with caution).
-    ///
-    /// Default: 50
-    ///
-    /// ## Example
-    /// ```swift
-    /// let config = AgentConfiguration.default
-    ///     .sessionHistoryLimit(20)  // Use only recent context
-    /// ```
-    ///
-    /// - Parameter value: Maximum messages to load, or nil for all
-    /// - Returns: A new configuration with the updated history limit
-    /// - SeeAlso: ``sessionHistoryLimit``, ``ConversationSession``
-    @discardableResult public func sessionHistoryLimit(_ value: Int?) -> AgentConfiguration {
-        var copy = self
-        copy.sessionHistoryLimit = value
-        return copy
-    }
-
-    // MARK: Parallel Execution Settings
-
-    /// Sets whether to execute multiple tool calls in parallel.
-    ///
-    /// When enabled, multiple tool calls in a single turn are executed
-    /// concurrently using Swift's structured concurrency.
-    ///
-    /// Default: false
-    ///
-    /// ## Example
-    /// ```swift
-    /// let config = AgentConfiguration.default
-    ///     .parallelToolCalls(true)
-    /// ```
-    ///
-    /// - Parameter value: true to enable parallel execution
-    /// - Returns: A new configuration with the updated parallel setting
-    /// - SeeAlso: ``parallelToolCalls``
-    @discardableResult public func parallelToolCalls(_ value: Bool) -> AgentConfiguration {
-        var copy = self
-        copy.parallelToolCalls = value
-        return copy
-    }
-
-    // MARK: Response Tracking Settings
-
-    /// Sets the previous response ID for conversation continuation.
-    ///
-    /// Set this to continue a conversation from a specific response.
-    /// The ID must be from a previous run in the same session.
-    ///
-    /// - Note: Usually set automatically when `autoPreviousResponseId` is enabled
-    ///
-    /// ## Example
-    /// ```swift
-    /// let config = AgentConfiguration.default
-    ///     .previousResponseId("resp_123abc")
-    /// ```
-    ///
-    /// - Parameter value: Previous response ID, or nil to start fresh
-    /// - Returns: A new configuration with the updated response ID
-    /// - SeeAlso: ``previousResponseId``, ``autoPreviousResponseId(_:)``
-    @discardableResult public func previousResponseId(_ value: String?) -> AgentConfiguration {
-        var copy = self
-        copy.previousResponseId = value
-        return copy
-    }
-
-    /// Sets whether to automatically populate previous response ID.
-    ///
-    /// When enabled, the agent automatically tracks response IDs from each
-    /// run and uses them for conversation continuation within a session.
-    ///
-    /// Default: false
-    ///
-    /// ## Example
-    /// ```swift
-    /// let config = AgentConfiguration.default
-    ///     .autoPreviousResponseId(true)
-    /// ```
-    ///
-    /// - Parameter value: true to enable automatic response ID tracking
-    /// - Returns: A new configuration with the updated auto-tracking setting
-    /// - SeeAlso: ``autoPreviousResponseId``, ``previousResponseId(_:)``
-    @discardableResult public func autoPreviousResponseId(_ value: Bool) -> AgentConfiguration {
-        var copy = self
-        copy.autoPreviousResponseId = value
-        return copy
-    }
-
-    // MARK: Observability Settings
-
-    /// Sets whether to enable default tracing when no explicit tracer is configured.
-    ///
-    /// When `true` and no tracer is set, the agent automatically uses a
-    /// `SwiftLogTracer` at `.debug` level for execution tracing.
-    ///
-    /// Default: true
-    ///
-    /// ## Example
-    /// ```swift
-    /// let config = AgentConfiguration.default
-    ///     .defaultTracingEnabled(false)  // Disable automatic tracing
-    /// ```
-    ///
-    /// - Parameter value: true to enable default tracing
-    /// - Returns: A new configuration with the updated tracing setting
-    /// - SeeAlso: ``defaultTracingEnabled``, ``SwiftLogTracer``
-    @discardableResult public func defaultTracingEnabled(_ value: Bool) -> AgentConfiguration {
-        var copy = self
-        copy.defaultTracingEnabled = value
-        return copy
+    /// Falls back to 1.0 for non-finite or out-of-range temperatures, matching
+    /// the designated initializer; warns via ``Log/agents`` when replaced.
+    /// Shares ``ModelSettings/temperatureRange`` so both types' temperature
+    /// bounds cannot drift apart.
+    static func coercedTemperature(_ value: Double) -> Double {
+        guard value.isFinite, ModelSettings.temperatureRange.contains(value) else {
+            Log.agents.warning("AgentConfiguration: temperature \(value) out of [0.0, 2.0]; using default 1.0")
+            return 1.0
+        }
+        return value
     }
 }
 
@@ -1137,8 +901,43 @@ extension AgentConfiguration: CustomStringConvertible {
             parallelToolCalls: \(parallelToolCalls),
             previousResponseId: \(previousResponseId.map { "\"\($0)\"" } ?? "nil"),
             autoPreviousResponseId: \(autoPreviousResponseId),
-            defaultTracingEnabled: \(defaultTracingEnabled)
+            defaultTracingEnabled: \(defaultTracingEnabled),
+            autoAttachMetricsCollector: \(autoAttachMetricsCollector),
+            foundationModelsExecution: \(legacyFoundationModelsExecution),
+            resilience: \(String(describing: resilience))
         )
         """
+    }
+
+    func warnIfDeprecatedNativeSessionFlag() {
+        FoundationModelsExecutionModeNag.warnIfNeeded(isNativeSession: legacyFoundationModelsExecution == "nativeSession")
+    }
+}
+
+enum FoundationModelsExecutionModeNag {
+    private static let once = OnceFlag()
+
+    static func warnIfNeeded(isNativeSession: Bool) {
+        guard isNativeSession else { return }
+        guard once.take() else { return }
+        Log.agents.warning(
+            """
+            AgentConfiguration.foundationModelsExecution is ignored. \
+            Construct .foundationModelsOwningToolLoop() for a provider-owned tool loop.
+            """
+        )
+    }
+}
+
+private final class OnceFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+
+    func take() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if done { return false }
+        done = true
+        return true
     }
 }

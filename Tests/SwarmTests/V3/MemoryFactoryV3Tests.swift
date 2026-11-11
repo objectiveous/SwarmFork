@@ -58,9 +58,9 @@ struct MemoryFactoryV3Tests {
 
     // MARK: - PersistentMemory Factory
 
-    @Test(".persistent() creates a PersistentMemory with InMemoryBackend")
+    @Test(".persistent(backend:) creates a PersistentMemory with InMemoryBackend")
     func persistentFactory() async {
-        let memory: PersistentMemory = .persistent()
+        let memory: PersistentMemory = .persistent(backend: InMemoryBackend())
         let count = await memory.count
         #expect(count == 0)
         #expect(await memory.isEmpty)
@@ -74,16 +74,33 @@ struct MemoryFactoryV3Tests {
         #expect(count == 0)
     }
 
-    @Test(".persistent(conversationId:) preserves the provided ID")
+    @Test(".persistent(backend:conversationId:) preserves the provided ID")
     func persistentFactoryConversationId() async {
         let id = "test-session-42"
-        let memory: PersistentMemory = .persistent(conversationId: id)
+        let memory: PersistentMemory = .persistent(backend: InMemoryBackend(), conversationId: id)
         #expect(await memory.conversationId == id)
     }
 
-    @Test(".persistent(maxMessages:) stores the limit")
+    @Test(".persistent(backend:maxMessages:) stores the limit")
     func persistentFactoryMaxMessages() async {
-        let memory: PersistentMemory = .persistent(maxMessages: 10)
+        let memory: PersistentMemory = .persistent(backend: InMemoryBackend(), maxMessages: 10)
+        #expect(await memory.maxMessages == 10)
+    }
+
+    @Test("deprecated .persistent() remains available through 0.7.0")
+    func deprecatedPersistentFactoryDefault() async {
+        let memory: PersistentMemory = .persistent()
+        #expect(await memory.isEmpty)
+        #expect(await memory.maxMessages == 0)
+    }
+
+    @Test("deprecated .persistent(conversationId:maxMessages:) preserves arguments")
+    func deprecatedPersistentFactoryArguments() async {
+        let memory: PersistentMemory = .persistent(
+            conversationId: "legacy-session",
+            maxMessages: 10
+        )
+        #expect(await memory.conversationId == "legacy-session")
         #expect(await memory.maxMessages == 10)
     }
 
@@ -171,10 +188,10 @@ struct MemoryFactoryV3Tests {
         #expect(agent.memory != nil)
     }
 
-    @Test("dot-syntax .persistent() works in withMemory modifier")
+    @Test("dot-syntax .persistent(backend:) works in withMemory modifier")
     func dotSyntaxPersistentInAgentModifier() throws {
         let agent = try Agent("test agent")
-            .withMemory(.persistent())
+            .withMemory(.persistent(backend: InMemoryBackend()))
         #expect(agent.memory != nil)
     }
 
@@ -211,7 +228,7 @@ struct MemoryFactoryV3Tests {
     @Test("PersistentMemory factory result satisfies some Memory parameter")
     func someMemoryParameterPersistent() {
         func acceptsMemory(_ memory: some Memory) -> Bool { true }
-        let memory: PersistentMemory = .persistent()
+        let memory: PersistentMemory = .persistent(backend: InMemoryBackend())
         #expect(acceptsMemory(memory))
     }
 

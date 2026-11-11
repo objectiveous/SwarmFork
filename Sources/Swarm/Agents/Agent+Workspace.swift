@@ -15,12 +15,20 @@ public extension Agent {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
-        let workspaceMemory = workspace.map { WorkspaceMemory(workspace: $0, activatedSkills: []) }
+        let memory: (any Memory)? = if let workspace {
+            try Self.workspaceMemory(
+                workspace: workspace,
+                activatedSkills: [],
+                cacheNamespace: "on-device"
+            )
+        } else {
+            nil
+        }
         return try Agent(
             tools: builtTools,
             instructions: combinedInstructions,
             configuration: configuration,
-            memory: workspaceMemory,
+            memory: memory,
             inferenceProvider: inferenceProvider
         )
     }
@@ -47,13 +55,56 @@ public extension Agent {
             tools: filterTools(builtTools, using: skills),
             instructions: combinedInstructions,
             configuration: configuration.name(spec.title),
-            memory: WorkspaceMemory(workspace: workspace, activatedSkills: skills),
+            memory: try workspaceMemory(
+                workspace: workspace,
+                activatedSkills: skills,
+                cacheNamespace: spec.id
+            ),
             inferenceProvider: inferenceProvider
         )
     }
 }
 
 private extension Agent {
+    static func workspaceMemory(
+        workspace: AgentWorkspace,
+        activatedSkills: [WorkspaceSkill],
+        cacheNamespace: String
+    ) throws -> any Memory {
+        CompositeMemory([
+            try makeWorkspaceDefaultMemory(workspace: workspace, cacheNamespace: cacheNamespace),
+            WorkspaceMemory(workspace: workspace, activatedSkills: activatedSkills),
+        ])
+    }
+
+    static func makeWorkspaceDefaultMemory(
+        workspace: AgentWorkspace,
+        cacheNamespace: String
+    ) throws -> any Memory {
+        let memoryDirectory = workspace.indexCacheRoot
+            .appendingPathComponent("default-agent-memory", isDirectory: true)
+            .appendingPathComponent(safeCacheNamespace(cacheNamespace), isDirectory: true)
+        try FileManager.default.createDirectory(at: memoryDirectory, withIntermediateDirectories: true)
+
+        #if SWARM_INTEGRATIONS && canImport(ContextCore)
+        return try DefaultAgentMemory(configuration: DefaultAgentMemory.Configuration(
+            waxStoreURL: memoryDirectory.appendingPathComponent("wax-memory.mv2s")
+        ))
+        #else
+        return SlidingWindowMemory()
+        #endif
+    }
+
+    static func safeCacheNamespace(_ rawValue: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        let sanitizedScalars = rawValue.unicodeScalars.map { scalar in
+            allowed.contains(scalar) ? Character(scalar) : "-"
+        }
+        let sanitized = String(sanitizedScalars)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-_"))
+        return sanitized.isEmpty ? "agent" : sanitized
+    }
+
     static func filterTools(_ tools: [any AnyJSONTool], using skills: [WorkspaceSkill]) -> [any AnyJSONTool] {
         let constrainedSkillLists = skills
             .map(\.allowedTools)
@@ -63,9 +114,7 @@ private extension Agent {
             return tools
         }
 
-        let allowedToolNames = constrainedSkillLists.dropFirst().reduce(into: Set(constrainedSkillLists[0])) { partialResult, next in
-            partialResult.formIntersection(next)
-        }
+        let allowedToolNames = Set(constrainedSkillLists.flatMap(\.self))
 
         return tools.filter { allowedToolNames.contains($0.name) }
     }

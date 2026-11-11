@@ -20,8 +20,8 @@ built around:
   persistent backends.
 - **Guardrails / Resilience / Observability** — first-class concerns, not
   bolt-ons.
-- **Providers** — Foundation Models, Anthropic, OpenAI, Ollama, Gemini,
-  MiniMax, OpenRouter, MLX, all routed through [Conduit](https://github.com/christopherkarani/Conduit).
+- **Providers** — Built-in Apple Foundation Models; custom backends inject
+  `InferenceProvider`. No Conduit / cloud façade ships with Swarm.
 - **MCP** — Model Context Protocol client and server support.
 
 The package uses Swift 6.2 with `StrictConcurrency` enabled across all targets.
@@ -31,7 +31,7 @@ The package uses Swift 6.2 with `StrictConcurrency` enabled across all targets.
 
 ```
 Swarm/
-├── Package.swift                  # SPM manifest (Swift 6.2, traits, products)
+├── Package.swift                  # SPM manifest (Swift 6.2, products)
 ├── README.md                      # User-facing overview
 ├── Sources/
 │   ├── Swarm/                     # Main library (156 .swift files)
@@ -43,18 +43,26 @@ Swarm/
 │   │   │                          #   built-ins, web tools, schema bridging
 │   │   ├── Memory/                # Conversation, sliding window, summary, vector,
 │   │   │                          #   SwiftData, ContextCore, hybrid backends
-│   │   ├── Providers/             # Conduit adapters, multi-provider, sessions
+│   │   ├── Providers/             # Foundation Models, multi-provider, sessions
 │   │   ├── Guardrails/            # Input/Output/Tool guardrail specs + runner
 │   │   ├── Resilience/            # Retry, circuit breaker, fallback, rate limit
 │   │   ├── Observability/         # AgentTracer, SwiftLog/OSLog tracers, metrics
-│   │   ├── MCP/                   # MCPClient, MCPServer, ToolBridge, capabilities
+│   │   ├── MCP/                   # MCPClient, MCPServerConnection, stdio/HTTP transports, ToolBridge
 │   │   ├── Workspace/             # AgentWorkspace (AGENTS.md, .swarm/ skills)
 │   │   ├── Macros/                # Public macro declarations
 │   │   ├── Integration/           # Membrane and Wax integrations
 │   │   └── Internal/GraphRuntime/ # Compiled DAG runtime (internal)
+│   ├── HiveCore/                  # In-tree durable graph (Integrations only)
+│   ├── MembraneCore/              # In-tree Membrane core (Integrations only)
+│   ├── Membrane/                  # In-tree Membrane session (Integrations only)
+│   ├── MembraneContextCore/       # In-tree Membrane↔ContextCore (Integrations)
+│   ├── ContextCoreTypes/          # In-tree ContextCore types (Integrations)
+│   ├── ContextCoreShaders/        # In-tree Metal shaders (Integrations)
+│   ├── ContextCoreEngine/         # In-tree ContextCore engine (Integrations)
+│   ├── ContextCore/               # In-tree ContextCore façade (Integrations)
 │   ├── SwarmMacros/               # Compiler plugin (@Tool, @Parameter,
 │   │                              #   @Traceable, #Prompt, builders)
-│   ├── SwarmMembrane/             # Membrane workflow integration product
+│   ├── SwarmMembrane/             # Deprecated hollow re-export (remove in 0.7.0)
 │   ├── SwarmMCP/                  # MCP server adapter product
 │   ├── SwarmCapabilityShowcase/        # Executable: deterministic showcase CLI
 │   ├── SwarmCapabilityShowcaseSupport/ # Library backing the showcase
@@ -63,7 +71,7 @@ Swarm/
 ├── Tests/
 │   ├── SwarmTests/                # Main test target (mirrors Sources/Swarm)
 │   │   └── Mocks/                 # MockAgentRuntime, MockInferenceProvider, …
-│   ├── HiveSwarmTests/            # Hive integration tests (gated)
+│   ├── HiveSwarmTests/            # Hive integration tests
 │   ├── SwarmMacrosTests/          # Macro expansion tests
 │   └── SwarmCapabilityShowcaseTests/
 ├── Examples/CodeReviewer/         # Standalone example SPM project
@@ -81,23 +89,60 @@ This is a Swift Package — there is no Xcode project committed. All commands ru
 from the repo root.
 
 ```bash
-swift package resolve         # Resolve dependencies
-swift build                   # Build the library targets
-swift test                    # Run all tests
-swift test --no-parallel      # Match CI ordering (recommended)
+swift package resolve         # Resolve dependencies (lean pins without Integrations)
+bash scripts/ci/lean-build-test.sh   # Cold lean resolve + product build + lean tests
+swift build --traits Integrations
+swift test --no-parallel --traits Integrations,MCP,OpenTelemetry
+swift test --no-parallel --traits Integrations,MCP,OpenTelemetry --filter HiveSwarmTests
 swift test --filter SwarmTests.WorkflowTests   # Run a single suite
+# Note: bare `swift build`/`swift test` without --traits Integrations still
+# compile every registered target (orphans need trait-gated remotes). Prefer
+# lean-build-test.sh or --traits Integrations on this package root.
 ```
 
-CI (`.github/workflows/swift.yml`) runs on macOS 15 and Ubuntu with Swift 6.2
-and uses these env vars:
+### Integrations trait (off by default)
+
+Default consumers get lean Swarm (core + Foundation Models). Enable the
+`Integrations` trait for durable Hive workflows, ContextCore+Wax default
+memory, Membrane adapters, and web helpers.
+
+HiveCore, Membrane (`MembraneCore` / `Membrane` / `MembraneContextCore`), and
+ContextCore (`ContextCoreTypes` / `ContextCoreShaders` / `ContextCoreEngine` /
+`ContextCore`) are **native in-tree** `Sources/` targets — internal modules
+only (no separate library products). They are linked into Swarm only when
+Integrations is on. ContextCore / full Membrane session stack are Apple-only
+(Metal/CoreML); Linux Integrations still links Hive + MembraneCore + web.
+Wax remains a remote package + trait-gated product; MetalANNS stays remote for
+the ContextCore chain. Lean resolve must not pull package identities `hive`,
+`membrane`, `contextcore`, or `conduit`, and must not pin Wax/MetalANNS/GRDB/
+crypto/mutex/SwiftSoup/MCP SDK/OTel/NIO (trait-gated product edges). Default-on:
+swift-syntax (via the Macros trait; disable with `traits: []`) and swift-log.
+Opt-in: `traits: ["MCP"]` for SwarmMCP, `traits: ["OpenTelemetry"]` for
+SwarmOpenTelemetry. CI: `scripts/ci/lean-build-test.sh` (cold resolve + product-scoped lean
+build + `SWARM_OMIT_INTEGRATION_TARGETS=1` tests) and
+`scripts/ci/verify-lean-resolve.sh`. Bare root `swift build` without
+`--traits Integrations` compiles every registered target — use the lean helper
+or product flags; consumers only build reachable targets.
 
 ```bash
-SWARM_HIVE_RUNTIME=1 SWARM_INCLUDE_HIVE=1 swift test --no-parallel
+swift build --traits Integrations
+swift test --no-parallel --traits Integrations,MCP,OpenTelemetry
 ```
 
-The Hive integration tests live in the `HiveSwarmTests` target. The
-`orchestrationRequireHiveFailClosed` test is asserted explicitly in CI as a
-fail-closed contract.
+Consumer `Package.swift`:
+
+```swift
+.package(url: "https://github.com/christopherkarani/Swarm.git", from: "0.6.0", traits: ["Integrations"])
+```
+
+CI (`.github/workflows/swift.yml`) runs on macOS 15 and Ubuntu with Swift 6.2.
+It exercises `scripts/ci/lean-build-test.sh` (cold lean resolve deny-list +
+product-scoped build + omit-target lean tests) plus a full
+`--traits Integrations` lane (including `HiveSwarmTests` and the capability
+showcase matrix).
+
+The Hive integration tests live in the `HiveSwarmTests` target and require
+`--traits Integrations`.
 
 ### Demo / benchmark executables
 
@@ -115,10 +160,10 @@ SWARM_INCLUDE_DEMO=1 swift run SwarmDemo
 in a deterministic matrix that is CI-safe:
 
 ```bash
-swift run SwarmCapabilityShowcase list      # Enumerate scenarios
-swift run SwarmCapabilityShowcase matrix    # Run the deterministic matrix
-swift run SwarmCapabilityShowcase run handoff
-swift run SwarmCapabilityShowcase smoke     # Live-provider, opt-in via env vars
+swift run --traits Integrations SwarmCapabilityShowcase list
+swift run --traits Integrations SwarmCapabilityShowcase matrix
+swift run --traits Integrations SwarmCapabilityShowcase run handoff
+swift run --traits Integrations SwarmCapabilityShowcase smoke
 ```
 
 See `docs/guide/capability-showcase.md` for the full scenario catalog and
@@ -157,12 +202,11 @@ swift package plugin --allow-writing-to-package-directory swiftformat
   unlabeled instructions string and a trailing `@ToolBuilder` closure for
   tools. See `Sources/Swarm/Agents/Agent.swift`.
 - Provider resolution order is documented at the top of `Agent.swift`:
-  1. explicit provider passed in,
+  1. explicit provider passed in (or privacy-required FM-first path),
   2. `.environment(\.inferenceProvider, ...)`,
-  3. `Swarm.defaultProvider`,
-  4. `Swarm.cloudProvider`,
-  5. Foundation Models (on-device),
-  6. else throw `AgentError.inferenceProviderUnavailable`.
+  3. `Swarm.defaultProvider` via `Swarm.configure(provider:)`,
+  4. Foundation Models (on-device) when available,
+  5. else throw `AgentError.inferenceProviderUnavailable`.
 - The `Agent` struct is `Sendable`; tools are stored as `[any AnyJSONTool]`.
 
 ### Tools
@@ -202,13 +246,17 @@ swift package plugin --allow-writing-to-package-directory swiftformat
 
 ### Providers
 
-- All inference goes through `InferenceProvider` adapters in
-  `Sources/Swarm/Providers/`. Production providers are routed through
-  [Conduit](https://github.com/christopherkarani/Conduit) (pinned to `0.3.14`
-  in `Package.swift`) with traits enabled for OpenAI, OpenRouter, Anthropic,
-  and MLX.
-- Foundation Models are now also routed through Conduit (see commits
-  `89d7ffa` and `6ae1df6`).
+- Built-in inference is **Apple Foundation Models only** via
+  `FoundationModelsInferenceProvider` under `Sources/Swarm/Providers/`.
+- Custom backends implement `InferenceProvider` and are injected on the agent
+  or via `await Swarm.configure(provider:)`. There is no Conduit package
+  dependency and no `LLM.*` / `cloudProvider` façade.
+- Native tool calling bridges Swarm `ToolSchema` to Apple's
+  `FoundationModels.Tool`.
+- Swarm `DynamicProfile` / `Profile` / `DynamicInstructions` / `ProfileMode`
+  are Swarm types used by `.foundationModels(profile:)`. They are **not**
+  Apple's `LanguageModelSession.DynamicProfile` (OS 27). Do not mix the
+  modules. Capture still re-resolves the Swarm profile each turn.
 
 ### Mocks & Test Helpers
 
@@ -247,7 +295,8 @@ The `.gitignore` deliberately excludes a number of paths AI assistants might
 otherwise want to create or check in. **Do not work around these.**
 
 - `.claude/`, `.mcp.json`, `.agent_context.md`, `AGENTS.md` — local AI tooling
-  config.
+  config, except `AGENTS.md`, which is intentionally tracked as the repo-level
+  guardrail for future agents.
 - `.swift-version` — contributors keep this locally; CI selects Swift through
   the workflow environment.
 - `Package.resolved` — library, not application.
@@ -256,6 +305,11 @@ otherwise want to create or check in. **Do not work around these.**
   `HIVE_EXTENSIBILITY_INTEGRATION_PLAN.md`, `PRODUCTION_READINESS_AUDIT.md` —
   internal planning artifacts.
 - `marketing/`, `website/`, VitePress build output.
+- `docs/reference/*audit-report.md`, `docs/reference/documentation-*-report.md`,
+  `docs/reference/documentation-improvement-plan.md`,
+  `docs/reference/api-quality-assessment.md`,
+  `docs/reference/twitter-article-*.md`, `docs/swarm-hacker-news-blog.md`,
+  `docs/superpowers/` — internal audit, planning, and marketing artifacts.
 
 `CLAUDE.md` itself was previously git-ignored; it has been intentionally
 un-ignored so this guidance can live in-repo.
@@ -263,9 +317,9 @@ un-ignored so this guidance can live in-repo.
 ## Public API Stability
 
 The framework is at `0.5.1` (`Sources/Swarm/Swarm.swift`) and treats its public
-surface as semi-stable. The audit documents in `docs/reference/` (especially
-`api-catalog.md`, `front-facing-api.md`, and `docc-audit-report.md`) define the
-sanctioned surface. Prefer:
+surface as semi-stable. The supported public reference documents are
+`docs/reference/api-catalog.md`, `docs/reference/front-facing-api.md`, and
+`docs/reference/overview.md`. Prefer:
 
 - adding new types over breaking existing ones,
 - adding new initializer overloads over changing parameter labels on existing
@@ -275,11 +329,27 @@ sanctioned surface. Prefer:
 ## When You're Stuck
 
 - For "what does X do?" questions, search `Sources/Swarm/<Area>/` first, then
-  `docs/reference/api-catalog.md`.
+  `docs/reference/api-catalog.md`. Refresh catalog header counts with
+  `scripts/ci/refresh-api-catalog-header.sh`; exhaustive rows stay hand-maintained.
 - For workflow examples, read `Sources/SwarmCapabilityShowcaseSupport/CapabilityShowcase.swift`
   — it touches every stable subsystem.
-- For provider behaviour, look at `Sources/Swarm/Providers/Conduit/` and the
-  `LanguageModelSession*` files.
+- For provider behaviour, look at `Sources/Swarm/Providers/FoundationModels/`.
+  Prompt-envelope tool emulation for text-only backends lives in
+  `PromptToolCallingEmulation.swift` and is not Apple's `LanguageModelSession`.
 - The `README.md` quick-start, the `docs/guide/getting-started.md` tutorial,
   and `docs/guide/agent-workspace.md` are the user-facing canonical docs —
   keep code samples consistent with them when changing surface area.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues on `christopherkarani/Swarm` (`gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Canonical roles map 1:1 to `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.

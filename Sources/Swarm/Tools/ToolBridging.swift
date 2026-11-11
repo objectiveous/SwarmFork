@@ -18,6 +18,7 @@ public struct AnyJSONToolAdapter<T: Tool>: AnyJSONTool, Sendable {
     public var parameters: [ToolParameter] { tool.parameters }
     public var inputGuardrails: [any ToolInputGuardrail] { tool.inputGuardrails }
     public var outputGuardrails: [any ToolOutputGuardrail] { tool.outputGuardrails }
+    public var executionSemantics: ToolExecutionSemantics { tool.executionSemantics }
 
     public init(_ tool: T) {
         self.tool = tool
@@ -39,9 +40,10 @@ public struct AnyJSONToolAdapter<T: Tool>: AnyJSONTool, Sendable {
         do {
             return try SendableValue(encoding: output)
         } catch {
-            throw AgentError.toolExecutionFailed(
+            throw AgentError.toolFailure(
                 toolName: name,
-                underlyingError: "Failed to encode \(String(describing: T.Output.self)) into JSONValue: \(error.localizedDescription)"
+                message: "Failed to encode \(String(describing: T.Output.self)) into JSONValue: \(error.localizedDescription)",
+                cause: error
             )
         }
     }
@@ -55,4 +57,3 @@ public extension Tool {
         AnyJSONToolAdapter(self)
     }
 }
-

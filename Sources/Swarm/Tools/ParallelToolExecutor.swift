@@ -68,23 +68,37 @@ import Foundation
 /// ## Performance Considerations
 ///
 /// - All tools are validated for existence before any execution begins
-/// - Execution uses `ContinuousClock` for precise timing measurements
+/// - Duration is measured by the shared tool execution engine's injectable clock
 /// - Failed tools do not block successful ones from completing
+/// - Consecutive tools that ``ToolExecutionSemantics/runtimePolicy()`` marks
+///   parallel-eligible still run concurrently; each explicit
+///   ``ToolSideEffectLevel/externalMutation`` is its own serial step so it
+///   does not overlap any other call. ``ToolExecutionSemantics/automatic``
+///   remains parallel-eligible.
 public actor ParallelToolExecutor {
     // MARK: Public
 
     // MARK: - Initialization
 
-    /// Creates a new parallel tool executor.
-    public init() {}
+    /// Creates a new parallel tool executor using the live Engine clock.
+    public init() {
+        engine = ToolExecutionEngine()
+    }
+
+    /// Creates an executor that runs every call through the given Engine.
+    init(engine: ToolExecutionEngine) {
+        self.engine = engine
+    }
 
     // MARK: - Public Methods
 
     /// Executes multiple tool calls in parallel.
     ///
     /// This method validates all tools exist in the registry before starting
-    /// any execution, then runs all tools concurrently. Results are returned
-    /// in the same order as the input calls, regardless of completion order.
+    /// any execution, then runs consecutive parallel-eligible tools concurrently.
+    /// Each explicit ``ToolSideEffectLevel/externalMutation`` is a serial step
+    /// so it does not overlap any other call. Results are returned in the same
+    /// order as the input calls, regardless of completion order.
     ///
     /// Individual tool failures are captured as `ToolExecutionResult.failure`
     /// entries rather than throwing. This allows the caller to handle partial
@@ -130,64 +144,14 @@ public actor ParallelToolExecutor {
             return []
         }
 
-        // 1. Validate all tools exist BEFORE starting any execution.
-        // This is a fast-fail optimization: if any tool is missing or disabled at the
-        // start of the batch, throw before launching N tasks. ToolRegistry.execute()
-        // re-validates per call inside the task group below, so a tool that gets
-        // disabled *after* this pre-pass surfaces as a `ToolExecutionResult.failure`
-        // for that single call rather than a fast-throw — consistent with how the
-        // parallel error strategies (`.failFast`, `.collectErrors`, `.continueOnError`)
-        // expect to handle per-tool failures.
-        for call in calls {
-            guard let tool = await registry.tool(named: call.toolName), tool.isEnabled else {
-                throw AgentError.toolNotFound(name: call.toolName)
-            }
-        }
-
-        // 2. Execute with structured concurrency - PRESERVE ORDER via index
-        return try await withThrowingTaskGroup(of: (Int, ToolExecutionResult).self) { group in
-            for (index, call) in calls.enumerated() {
-                group.addTask { [registry, agent, context] in
-                    let startTime = ContinuousClock.now
-                    do {
-                        let result = try await registry.execute(
-                            toolNamed: call.toolName,
-                            arguments: call.arguments,
-                            agent: agent,
-                            context: context
-                        )
-                        let duration = ContinuousClock.now - startTime
-                        return (index, ToolExecutionResult.success(
-                            toolName: call.toolName,
-                            arguments: call.arguments,
-                            value: result,
-                            duration: duration
-                        ))
-                    } catch {
-                        let duration = ContinuousClock.now - startTime
-                        return (index, ToolExecutionResult.failure(
-                            toolName: call.toolName,
-                            arguments: call.arguments,
-                            error: error,
-                            duration: duration
-                        ))
-                    }
-                }
-            }
-
-            // 3. Collect all results with cancellation support
-            var indexedResults: [(Int, ToolExecutionResult)] = []
-            indexedResults.reserveCapacity(calls.count)
-
-            for try await result in group {
-                try Task.checkCancellation()
-                indexedResults.append(result)
-            }
-
-            // 4. Sort by index to restore original order
-            indexedResults.sort { $0.0 < $1.0 }
-            return indexedResults.map(\.1)
-        }
+        try await validateToolsExist(in: calls, registry: registry)
+        return try await executeCalls(
+            calls,
+            using: registry,
+            agent: agent,
+            context: context,
+            stopOnToolError: false
+        )
     }
 
     /// Executes multiple tool calls in parallel with an error handling strategy.
@@ -208,8 +172,9 @@ public actor ParallelToolExecutor {
     ///
     /// ## Error Strategies
     ///
-    /// - **`.failFast`**: Throws the first error found in the results.
-    ///   All tools still execute, but the first failure causes a throw.
+    /// - **`.failFast`**: Throws the first tool error and cancels remaining
+    ///   work in the current concurrent group; later serial or concurrent
+    ///   groups never start.
     ///
     /// - **`.collectErrors`**: Throws a composite error if any tool failed.
     ///   The error message includes all failure descriptions.
@@ -278,9 +243,10 @@ public actor ParallelToolExecutor {
             let errors = results.compactMap(\.error)
             if !errors.isEmpty {
                 let errorDescriptions = errors.map(\.localizedDescription)
-                throw AgentError.toolExecutionFailed(
+                throw AgentError.toolFailure(
                     toolName: "parallel_execution",
-                    underlyingError: "Multiple tools failed: \(errorDescriptions.joined(separator: "; "))"
+                    message: "Multiple tools failed: \(errorDescriptions.joined(separator: "; "))",
+                    cause: errors.first
                 )
             }
 
@@ -294,12 +260,14 @@ public actor ParallelToolExecutor {
 
     // MARK: Private
 
+    private let engine: ToolExecutionEngine
+
     // MARK: - Private Methods
 
     /// Executes tools with true fail-fast cancellation.
     ///
-    /// Unlike the standard parallel execution, this method cancels all remaining
-    /// tasks immediately when the first failure is detected, saving resources.
+    /// Unlike the standard parallel execution, this method cancels remaining
+    /// work when the first Engine invocation throws.
     private func executeWithFailFast(
         _ calls: [ToolCall],
         using registry: ToolRegistry,
@@ -308,47 +276,55 @@ public actor ParallelToolExecutor {
     ) async throws -> [ToolExecutionResult] {
         guard !calls.isEmpty else { return [] }
 
-        // Validate all tools exist first
+        try await validateToolsExist(in: calls, registry: registry)
+        return try await executeCalls(
+            calls,
+            using: registry,
+            agent: agent,
+            context: context,
+            stopOnToolError: true
+        )
+    }
+
+    /// Fail-fast validation before any Engine invocation.
+    ///
+    /// A tool that is disabled *after* this pre-pass still goes through Engine
+    /// and surfaces as a per-call failure when `stopOnToolError` is false.
+    private func validateToolsExist(
+        in calls: [ToolCall],
+        registry: ToolRegistry
+    ) async throws {
         for call in calls {
-            guard await registry.tool(named: call.toolName) != nil else {
+            guard let tool = await registry.tool(named: call.toolName), tool.isEnabled else {
                 throw AgentError.toolNotFound(name: call.toolName)
             }
         }
+    }
 
-        // Execute with early cancellation on first failure
-        return try await withThrowingTaskGroup(of: (Int, ToolExecutionResult).self) { group in
-            for (index, call) in calls.enumerated() {
-                group.addTask { [registry, agent, context] in
-                    let startTime = ContinuousClock.now
-                    // Let errors propagate for fail-fast behavior
-                    let result = try await registry.execute(
-                        toolNamed: call.toolName,
-                        arguments: call.arguments,
-                        agent: agent,
-                        context: context
-                    )
-                    let duration = ContinuousClock.now - startTime
-                    return (index, ToolExecutionResult.success(
-                        toolName: call.toolName,
-                        arguments: call.arguments,
-                        value: result,
-                        duration: duration
-                    ))
-                }
-            }
-
-            // Collect results, throwing on first error (which cancels remaining tasks)
-            var indexedResults: [(Int, ToolExecutionResult)] = []
-            indexedResults.reserveCapacity(calls.count)
-
-            for try await result in group {
-                try Task.checkCancellation()
-                indexedResults.append(result)
-            }
-
-            // Sort by index to restore original order
-            indexedResults.sort { $0.0 < $1.0 }
-            return indexedResults.map(\.1)
+    private func executeCalls(
+        _ calls: [ToolCall],
+        using registry: ToolRegistry,
+        agent: any AgentRuntime,
+        context: AgentContext?,
+        stopOnToolError: Bool
+    ) async throws -> [ToolExecutionResult] {
+        let outcomes = try await engine.executeBatch(
+            calls,
+            registry: registry,
+            agent: agent,
+            context: context,
+            resultBuilder: AgentResult.Builder(),
+            observer: nil,
+            tracing: nil,
+            stopOnToolError: stopOnToolError,
+            allowConcurrent: true
+        )
+        return zip(calls, outcomes).map { call, outcome in
+            ToolExecutionResult.from(
+                call: call,
+                result: outcome.result,
+                underlyingError: outcome.caughtError
+            )
         }
     }
 }

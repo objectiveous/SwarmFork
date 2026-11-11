@@ -72,10 +72,25 @@ public struct TracingHelper: Sendable {
         ))
     }
 
-    /// Trace agent execution completion
+    /// Trace agent execution completion using ``AgentResult/tokenUsage``.
+    ///
+    /// Prefer ``traceComplete(result:tokenUsage:)`` when this span should report
+    /// only this agent's own LLM usage and exclude nested handoff totals.
     ///
     /// - Parameter result: The result of execution
     public func traceComplete(result: AgentResult) async {
+        await traceComplete(result: result, tokenUsage: result.tokenUsage)
+    }
+
+    /// Trace agent execution completion.
+    ///
+    /// - Parameters:
+    ///   - result: The result of execution
+    ///   - tokenUsage: Usage attributed to this agent span. Pass this agent's own
+    ///     LLM usage so a shared ``MetricsCollector`` does not double-count nested
+    ///     handoff runs that already emitted their own `agentComplete` events.
+    ///     Pass `nil` when the provider omitted usage.
+    public func traceComplete(result: AgentResult, tokenUsage: TokenUsage?) async {
         guard let tracer else { return }
         let duration = ContinuousClock.now - startTime
         await tracer.trace(TraceEvent(
@@ -83,12 +98,21 @@ public struct TracingHelper: Sendable {
             duration: duration.timeInterval,
             kind: .agentComplete,
             message: "LegacyAgent \(agentName) completed",
-            metadata: [
-                "duration_ms": .double(duration.milliseconds),
-                "iterations": .int(result.iterationCount),
-                "tool_calls_count": .int(result.toolCalls.count),
-                "output_length": .int(result.output.count)
-            ],
+            metadata: {
+                var metadata: [String: SendableValue] = [
+                    "iterations": .int(result.iterationCount),
+                    "tool_calls_count": .int(result.toolCalls.count),
+                    "output_length": .int(result.output.count)
+                ]
+                metadata[.durationMs] = duration.milliseconds
+                if let usage = tokenUsage {
+                    metadata[.inputTokens] = usage.inputTokens
+                    metadata[.outputTokens] = usage.outputTokens
+                    metadata[.totalTokens] = usage.totalTokens
+                    metadata[.legacyTokenCount] = usage.totalTokens
+                }
+                return metadata
+            }(),
             agentName: agentName
         ))
     }
@@ -105,11 +129,14 @@ public struct TracingHelper: Sendable {
             kind: .agentError,
             level: .error,
             message: "LegacyAgent \(agentName) error: \(error.localizedDescription)",
-            metadata: [
-                "duration_ms": .double(duration.milliseconds),
-                "error_type": .string(String(describing: type(of: error))),
-                "error_message": .string(error.localizedDescription)
-            ],
+            metadata: {
+                var metadata: [String: SendableValue] = [
+                    "error_type": .string(String(describing: type(of: error))),
+                    "error_message": .string(error.localizedDescription)
+                ]
+                metadata[.durationMs] = duration.milliseconds
+                return metadata
+            }(),
             agentName: agentName,
             error: ErrorInfo(from: error)
         ))
@@ -229,11 +256,14 @@ public struct TracingHelper: Sendable {
             kind: .toolResult,
             level: .debug,
             message: "Tool result: \(name)",
-            metadata: [
-                "tool_name": .string(name),
-                "result_length": .int(result.count),
-                "duration_ms": .double(duration.milliseconds)
-            ],
+            metadata: {
+                var metadata: [String: SendableValue] = [
+                    "tool_name": .string(name),
+                    "result_length": .int(result.count)
+                ]
+                metadata[.durationMs] = duration.milliseconds
+                return metadata
+            }(),
             agentName: agentName,
             toolName: name
         ))
@@ -390,6 +420,28 @@ public struct TracingHelper: Sendable {
             message: recordsSensitiveContent ? message : "Custom event recorded",
             metadata: safeMetadata,
             agentName: agentName
+        ))
+    }
+
+    /// Trace a retried provider inference attempt.
+    ///
+    /// - Parameters:
+    ///   - attempt: 1-indexed retry number (the first retry is `1`).
+    ///   - error: The error that triggered the retry.
+    public func traceInferenceRetry(attempt: Int, error: Error) async {
+        guard let tracer else { return }
+        await tracer.trace(TraceEvent(
+            traceId: traceId,
+            kind: .metric,
+            level: .warning,
+            message: "Inference retry attempt \(attempt)",
+            metadata: [
+                "metric_name": .string("inference_retry"),
+                "attempt": .int(attempt),
+                "failure_kind": .string(String(reflecting: Swift.type(of: error)))
+            ],
+            agentName: agentName,
+            error: ErrorInfo(from: error)
         ))
     }
 

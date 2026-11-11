@@ -12,9 +12,11 @@ import Foundation
 
 /// An HTTP-based client for Model Context Protocol (MCP) servers.
 ///
-/// HTTPMCPServer provides a stateless HTTP transport for communicating with
-/// MCP-compliant servers. It handles JSON-RPC 2.0 request/response encoding,
-/// automatic retries with exponential backoff, and capability negotiation.
+/// HTTPMCPServer speaks the streamable HTTP transport: JSON-RPC over POST
+/// with `Accept: application/json, text/event-stream`, `MCP-Protocol-Version`,
+/// and `MCP-Session-Id` when the server assigns one. Responses may be a
+/// JSON body or an SSE `data:` event. The client negotiates protocol version
+/// on initialize and fails loudly on unsupported servers.
 ///
 /// ## Example Usage
 ///
@@ -47,7 +49,7 @@ import Foundation
 ///
 /// HTTPMCPServer is implemented as an actor, ensuring thread-safe access
 /// to mutable state such as cached capabilities.
-public actor HTTPMCPServer: MCPServer {
+public actor HTTPMCPServer: MCPServerConnection {
     // MARK: Public
 
     // MARK: - Public Properties
@@ -61,6 +63,18 @@ public actor HTTPMCPServer: MCPServer {
     /// Call `initialize()` to populate capabilities from the server.
     public var capabilities: MCPCapabilities {
         cachedCapabilities ?? MCPCapabilities()
+    }
+
+    /// The protocol version negotiated during ``initialize()``.
+    ///
+    /// `nil` until initialize succeeds.
+    public var negotiatedProtocolVersion: String? {
+        cachedProtocolVersion
+    }
+
+    /// The session identifier assigned by a streamable HTTP server, if any.
+    public var sessionID: String? {
+        cachedSessionID
     }
 
     // MARK: - Initialization
@@ -92,6 +106,8 @@ public actor HTTPMCPServer: MCPServer {
         baseURL = url
         self.name = name
         self.apiKey = apiKey
+        apiKeyReference = nil
+        secretStore = nil
         self.timeout = timeout
         self.maxRetries = maxRetries
         self.session = session
@@ -101,25 +117,62 @@ public actor HTTPMCPServer: MCPServer {
         decoder = JSONDecoder()
     }
 
-    // MARK: - MCPServer Protocol Implementation
+    /// Creates an HTTP MCP server client that resolves its API key from a ``SecretStore``.
+    ///
+    /// The reference is resolved lazily on the first request and cached
+    /// until ``close()``. Use ``KeychainSecretStore`` on Apple platforms
+    /// so the raw key never sits in persisted configuration.
+    ///
+    /// - Parameters:
+    ///   - url: The base URL of the MCP server. Must use HTTPS.
+    ///   - name: A name for this server instance (used for identification and logging).
+    ///   - apiKeyReference: Pointer to the API key used for Bearer authentication.
+    ///   - secretStore: Backend holding the referenced secret.
+    ///   - timeout: The request timeout interval in seconds. Default: 30.0
+    ///   - maxRetries: The maximum number of retry attempts for failed requests. Default: 3
+    ///   - session: The URLSession to use for requests. Default: .shared
+    public init(
+        url: URL,
+        name: String,
+        apiKeyReference: SecretReference,
+        secretStore: any SecretStore,
+        timeout: TimeInterval = 30.0,
+        maxRetries: Int = 3,
+        session: URLSession = .shared
+    ) throws {
+        // Security: Enforce HTTPS when API keys are used to prevent credential exposure.
+        guard url.scheme?.lowercased() == "https" else {
+            throw MCPError.invalidParams(
+                "HTTPS is required when using API keys. URL scheme: \(url.scheme ?? "nil")"
+            )
+        }
+
+        baseURL = url
+        self.name = name
+        apiKey = nil
+        self.apiKeyReference = apiKeyReference
+        self.secretStore = secretStore
+        self.timeout = timeout
+        self.maxRetries = maxRetries
+        self.session = session
+        cachedCapabilities = nil
+
+        encoder = JSONEncoder()
+        decoder = JSONDecoder()
+    }
+
+    // MARK: - MCPServerConnection Protocol Implementation
 
     /// Initializes the connection to the MCP server and negotiates capabilities.
     ///
-    /// Sends an "initialize" request with protocol version and client information,
-    /// then parses and caches the server's capabilities.
+    /// Sends an "initialize" request offering ``MCPProtocolVersion/current``,
+    /// accepts any version in ``MCPProtocolVersion/supported``, and throws
+    /// ``MCPError/unsupportedProtocolVersion(_:)`` otherwise.
     ///
     /// - Returns: The capabilities supported by this server.
-    /// - Throws: `MCPError` if initialization fails.
+    /// - Throws: `MCPError` if initialization or version negotiation fails.
     public func initialize() async throws -> MCPCapabilities {
-        let params: [String: SendableValue] = [
-            "protocolVersion": .string("2024-11-05"),
-            "clientInfo": .dictionary([
-                "name": .string("Swarm"),
-                "version": .string("1.0.0")
-            ])
-        ]
-
-        let request = try MCPRequest(method: "initialize", params: params)
+        let request = try MCPRequest(method: "initialize", params: MCPWireCodec.initializeParameters())
         let response = try await sendRequest(request)
 
         if let error = response.error {
@@ -130,7 +183,10 @@ public actor HTTPMCPServer: MCPServer {
             throw MCPError.internalError("No result in initialize response")
         }
 
-        let capabilities = try parseCapabilities(from: result)
+        let version = try MCPWireCodec.negotiatedVersion(from: result)
+        let capabilities = try MCPWireCodec.parseCapabilities(from: result)
+        cachedProtocolVersion = version
+        try await sendNotification(try MCPNotification(method: "notifications/initialized"))
         cachedCapabilities = capabilities
         return capabilities
     }
@@ -151,34 +207,34 @@ public actor HTTPMCPServer: MCPServer {
             throw MCPError.internalError("No result in tools/list response")
         }
 
-        return try parseTools(from: result)
+        return try MCPWireCodec.parseTools(from: result)
     }
 
-    /// Calls a tool on the MCP server with the specified arguments.
+    /// Calls a tool and returns unwrapped content blocks.
+    ///
+    /// A single MCP `text` content block becomes a `.string`. Use
+    /// ``callToolRaw(name:arguments:)`` to keep the protocol envelope.
     ///
     /// - Parameters:
     ///   - name: The name of the tool to call.
     ///   - arguments: A dictionary of argument names to values.
-    /// - Returns: The result of the tool execution.
-    /// - Throws: `MCPError` if the request fails.
+    /// - Returns: The unwrapped tool result.
+    /// - Throws: `MCPError` if the name is empty, the request fails, or the
+    ///   tool reports `isError`.
     public func callTool(name: String, arguments: [String: SendableValue]) async throws -> SendableValue {
-        let params: [String: SendableValue] = [
-            "name": .string(name),
-            "arguments": .dictionary(arguments)
-        ]
+        try await invokeTool(name: name, arguments: arguments, style: .unwrappedContent)
+    }
 
-        let request = try MCPRequest(method: "tools/call", params: params)
-        let response = try await sendRequest(request)
-
-        if let error = response.error {
-            throw MCPError(code: error.code, message: error.message, data: error.data)
-        }
-
-        guard let result = response.result else {
-            throw MCPError.internalError("No result in tools/call response")
-        }
-
-        return result
+    /// Calls a tool and returns the raw `tools/call` envelope.
+    ///
+    /// - Parameters:
+    ///   - name: The name of the tool to call.
+    ///   - arguments: A dictionary of argument names to values.
+    /// - Returns: The raw result object (`content`, `isError`, …), including
+    ///   envelopes where `isError` is `true`.
+    /// - Throws: `MCPError` if the name is empty or the request fails.
+    public func callToolRaw(name: String, arguments: [String: SendableValue]) async throws -> SendableValue {
+        try await invokeTool(name: name, arguments: arguments, style: .rawEnvelope)
     }
 
     /// Lists all resources available from this MCP server.
@@ -197,7 +253,7 @@ public actor HTTPMCPServer: MCPServer {
             throw MCPError.internalError("No result in resources/list response")
         }
 
-        return try parseResources(from: result)
+        return try MCPWireCodec.parseResources(from: result)
     }
 
     /// Reads the content of a resource from the MCP server.
@@ -249,15 +305,20 @@ public actor HTTPMCPServer: MCPServer {
             throw MCPError.internalError("No result in resources/read response")
         }
 
-        return try parseResourceContent(from: result)
+        return try MCPWireCodec.parseResourceContent(from: result)
     }
 
     /// Closes the connection to the MCP server.
     ///
-    /// For HTTP, this simply clears the cached capabilities since the
-    /// transport is stateless. It is safe to call multiple times.
+    /// Clears cached capabilities, the negotiated version, the session id,
+    /// and the resolved API key (the reference re-resolves on the next
+    /// request). It is safe to call multiple times.
     public func close() async throws {
         cachedCapabilities = nil
+        cachedProtocolVersion = nil
+        cachedSessionID = nil
+        resolvedAPIKey = nil
+        didResolveAPIKey = false
     }
 
     // MARK: Private
@@ -273,6 +334,18 @@ public actor HTTPMCPServer: MCPServer {
     /// The optional API key for authentication.
     private let apiKey: String?
 
+    /// Keychain (or other ``SecretStore``) pointer for the API key.
+    private let apiKeyReference: SecretReference?
+
+    /// Backend resolving `apiKeyReference`, if any.
+    private let secretStore: (any SecretStore)?
+
+    /// Cached key resolved from `apiKeyReference`.
+    private var resolvedAPIKey: String?
+
+    /// Whether `apiKeyReference` has been resolved (even to `nil`).
+    private var didResolveAPIKey = false
+
     /// The request timeout interval.
     private let timeout: TimeInterval
 
@@ -281,6 +354,12 @@ public actor HTTPMCPServer: MCPServer {
 
     /// Cached capabilities from the server.
     private var cachedCapabilities: MCPCapabilities?
+
+    /// Protocol version accepted during initialize.
+    private var cachedProtocolVersion: String?
+
+    /// Streamable HTTP session identifier, when the server assigned one.
+    private var cachedSessionID: String?
 
     /// JSON encoder for requests.
     private let encoder: JSONEncoder
@@ -299,11 +378,30 @@ public actor HTTPMCPServer: MCPServer {
     /// - Returns: The MCP response from the server.
     /// - Throws: `MCPError` if all retry attempts fail.
     private func sendRequest(_ mcpRequest: MCPRequest) async throws -> MCPResponse {
+        try await sendWithRetry {
+            try await self.performRequest(mcpRequest)
+        }
+    }
+
+    /// Sends an MCP notification with retry logic.
+    ///
+    /// Notifications are JSON-RPC messages without an `id`; successful HTTP responses
+    /// do not need to contain a JSON-RPC body.
+    ///
+    /// - Parameter notification: The MCP notification to send.
+    /// - Throws: `MCPError` if all retry attempts fail.
+    private func sendNotification(_ notification: MCPNotification) async throws {
+        try await sendWithRetry {
+            try await self.performNotification(notification)
+        }
+    }
+
+    private func sendWithRetry<T>(_ operation: () async throws -> T) async throws -> T {
         var lastError: Error?
 
         for attempt in 0..<(maxRetries + 1) {
             do {
-                return try await performRequest(mcpRequest)
+                return try await operation()
             } catch let error as MCPError {
                 lastError = error
 
@@ -361,27 +459,17 @@ public actor HTTPMCPServer: MCPServer {
     /// - Returns: The MCP response from the server.
     /// - Throws: `MCPError` if the request fails.
     private func performRequest(_ mcpRequest: MCPRequest) async throws -> MCPResponse {
-        var urlRequest = URLRequest(url: baseURL)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.timeoutInterval = timeout
-
-        if let apiKey {
-            urlRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        }
-
-        urlRequest.httpBody = try encoder.encode(mcpRequest)
-
+        let urlRequest = try await makeStreamableRequest(body: encoder.encode(mcpRequest))
         let (data, response) = try await session.data(for: urlRequest)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw MCPError.internalError("Invalid response type")
         }
 
-        // Check for HTTP errors
+        captureSessionID(from: httpResponse)
+
         let statusCode = httpResponse.statusCode
         guard (200 ... 299).contains(statusCode) else {
-            // Try to decode error message from response body
             let errorMessage = if let bodyString = String(data: data, encoding: .utf8), !bodyString.isEmpty {
                 "HTTP \(statusCode): \(bodyString)"
             } else {
@@ -391,177 +479,133 @@ public actor HTTPMCPServer: MCPServer {
             throw MCPError(code: statusCode, message: errorMessage)
         }
 
-        return try decoder.decode(MCPResponse.self, from: data)
+        let payload = try decodeHTTPBody(data, response: httpResponse)
+        return try decoder.decode(MCPResponse.self, from: payload)
     }
 
-    // MARK: - Parsing Helpers
-
-    /// Parses capabilities from an initialize response.
+    /// Performs a single HTTP notification request to the MCP server.
     ///
-    /// - Parameter value: The result value from the initialize response.
-    /// - Returns: The parsed MCPCapabilities.
-    /// - Throws: `MCPError` if parsing fails.
-    private func parseCapabilities(from value: SendableValue) throws -> MCPCapabilities {
-        guard let dict = value.dictionaryValue else {
-            throw MCPError.parseError("Expected dictionary in initialize result")
+    /// - Parameter notification: The JSON-RPC notification to send.
+    /// - Throws: `MCPError` if the request fails.
+    private func performNotification(_ notification: MCPNotification) async throws {
+        let urlRequest = try await makeStreamableRequest(body: encoder.encode(notification))
+        let (data, response) = try await session.data(for: urlRequest)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw MCPError.internalError("Invalid response type")
         }
 
-        let capabilitiesDict = dict["capabilities"]?.dictionaryValue ?? [:]
+        captureSessionID(from: httpResponse)
 
-        let hasTools = capabilitiesDict["tools"] != nil
-        let hasResources = capabilitiesDict["resources"] != nil
-        let hasPrompts = capabilitiesDict["prompts"] != nil
-        let hasSampling = capabilitiesDict["sampling"] != nil
-
-        return MCPCapabilities(
-            tools: hasTools,
-            resources: hasResources,
-            prompts: hasPrompts,
-            sampling: hasSampling
-        )
-    }
-
-    /// Parses tool schemas from a tools/list response.
-    ///
-    /// - Parameter value: The result value from the tools/list response.
-    /// - Returns: An array of ToolSchema objects.
-    /// - Throws: `MCPError` if parsing fails.
-    private func parseTools(from value: SendableValue) throws -> [ToolSchema] {
-        guard let dict = value.dictionaryValue,
-              let toolsArray = dict["tools"]?.arrayValue else {
-            throw MCPError.parseError("Expected dictionary with 'tools' array in tools/list result")
-        }
-
-        var tools: [ToolSchema] = []
-
-        for toolValue in toolsArray {
-            guard let toolDict = toolValue.dictionaryValue,
-                  let name = extractString(toolDict["name"]) else {
-                continue
+        let statusCode = httpResponse.statusCode
+        guard (200 ... 299).contains(statusCode) else {
+            let errorMessage = if let bodyString = String(data: data, encoding: .utf8), !bodyString.isEmpty {
+                "HTTP \(statusCode): \(bodyString)"
+            } else {
+                "HTTP \(statusCode)"
             }
 
-            let description = extractString(toolDict["description"]) ?? ""
-            let parameters = parseParameters(from: toolDict["inputSchema"])
-
-            tools.append(ToolSchema(name: name, description: description, parameters: parameters))
-        }
-
-        return tools
-    }
-
-    /// Parses parameters from a JSON Schema inputSchema.
-    ///
-    /// - Parameter schema: The inputSchema value.
-    /// - Returns: An array of ToolParameter objects.
-    private func parseParameters(from schema: SendableValue?) -> [ToolParameter] {
-        guard let schemaDict = schema?.dictionaryValue,
-              let properties = schemaDict["properties"]?.dictionaryValue else {
-            return []
-        }
-
-        let requiredSet = Set(schemaDict["required"]?.arrayValue?.compactMap(\.stringValue) ?? [])
-        var parameters: [ToolParameter] = []
-
-        for (name, propValue) in properties {
-            guard let propDict = propValue.dictionaryValue else { continue }
-
-            let description = extractString(propDict["description"]) ?? ""
-            let typeString = extractString(propDict["type"]) ?? "any"
-            let paramType = mapParameterType(typeString)
-            let isRequired = requiredSet.contains(name)
-
-            parameters.append(ToolParameter(
-                name: name,
-                description: description,
-                type: paramType,
-                isRequired: isRequired
-            ))
-        }
-
-        return parameters
-    }
-
-    /// Maps a JSON Schema type string to a ToolParameter.ParameterType.
-    ///
-    /// - Parameter typeString: The JSON Schema type string.
-    /// - Returns: The corresponding ParameterType.
-    private func mapParameterType(_ typeString: String) -> ToolParameter.ParameterType {
-        switch typeString.lowercased() {
-        case "string": .string
-        case "integer": .int
-        case "number": .double
-        case "boolean": .bool
-        case "array": .array(elementType: .any)
-        case "object": .object(properties: [])
-        default: .any
+            throw MCPError(code: statusCode, message: errorMessage)
         }
     }
 
-    /// Parses resources from a resources/list response.
-    ///
-    /// - Parameter value: The result value from the resources/list response.
-    /// - Returns: An array of MCPResource objects.
-    /// - Throws: `MCPError` if parsing fails.
-    private func parseResources(from value: SendableValue) throws -> [MCPResource] {
-        guard let dict = value.dictionaryValue,
-              let resourcesArray = dict["resources"]?.arrayValue else {
-            throw MCPError.parseError("Expected dictionary with 'resources' array in resources/list result")
+    private func invokeTool(
+        name: String,
+        arguments: [String: SendableValue],
+        style: MCPToolResultStyle
+    ) async throws -> SendableValue {
+        try MCPWireCodec.requireToolName(name)
+
+        let params: [String: SendableValue] = [
+            "name": .string(name),
+            "arguments": .dictionary(arguments)
+        ]
+
+        let request = try MCPRequest(method: "tools/call", params: params)
+        let response = try await sendRequest(request)
+
+        if let error = response.error {
+            throw MCPError(code: error.code, message: error.message, data: error.data)
         }
 
-        var resources: [MCPResource] = []
+        guard let result = response.result else {
+            throw MCPError.internalError("No result in tools/call response")
+        }
 
-        for resourceValue in resourcesArray {
-            guard let resourceDict = resourceValue.dictionaryValue,
-                  let uri = extractString(resourceDict["uri"]),
-                  let name = extractString(resourceDict["name"]) else {
-                continue
+        return try MCPWireCodec.toolCallResult(result, toolName: name, style: style)
+    }
+
+    private func makeStreamableRequest(body: Data) async throws -> URLRequest {
+        if apiKey == nil, let apiKeyReference, !didResolveAPIKey {
+            if let secretStore {
+                do {
+                    resolvedAPIKey = try await secretStore.secret(for: apiKeyReference)
+                } catch {
+                    // Leave the reference unresolved so a transient store
+                    // failure retries on the next request instead of
+                    // permanently de-authing this server.
+                    didResolveAPIKey = false
+                    throw error
+                }
             }
-
-            let description = extractString(resourceDict["description"])
-            let mimeType = extractString(resourceDict["mimeType"])
-
-            resources.append(MCPResource(
-                uri: uri,
-                name: name,
-                description: description,
-                mimeType: mimeType
-            ))
+            didResolveAPIKey = true
         }
 
-        return resources
-    }
-
-    /// Parses resource content from a resources/read response.
-    ///
-    /// - Parameter value: The result value from the resources/read response.
-    /// - Returns: The parsed MCPResourceContent.
-    /// - Throws: `MCPError` if parsing fails.
-    private func parseResourceContent(from value: SendableValue) throws -> MCPResourceContent {
-        guard let dict = value.dictionaryValue,
-              let contentsArray = dict["contents"]?.arrayValue,
-              let firstContent = contentsArray.first,
-              let contentDict = firstContent.dictionaryValue else {
-            throw MCPError.parseError("Expected dictionary with 'contents' array in resources/read result")
-        }
-
-        let uri = extractString(contentDict["uri"]) ?? ""
-        let mimeType = extractString(contentDict["mimeType"])
-        let text = extractString(contentDict["text"])
-        let blob = extractString(contentDict["blob"])
-
-        return try MCPResourceContent(
-            uri: uri,
-            mimeType: mimeType,
-            text: text,
-            blob: blob
+        var urlRequest = URLRequest(url: baseURL)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
+        urlRequest.setValue(
+            cachedProtocolVersion ?? MCPProtocolVersion.current,
+            forHTTPHeaderField: "MCP-Protocol-Version"
         )
+        urlRequest.timeoutInterval = timeout
+
+        if let cachedSessionID {
+            urlRequest.setValue(cachedSessionID, forHTTPHeaderField: "MCP-Session-Id")
+        }
+
+        if let apiKey = apiKey ?? resolvedAPIKey {
+            urlRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+
+        urlRequest.httpBody = body
+        return urlRequest
     }
 
-    /// Extracts a string from a SendableValue.
-    ///
-    /// - Parameter value: The value to extract from.
-    /// - Returns: The string value, or nil if not a string.
-    private func extractString(_ value: SendableValue?) -> String? {
-        value?.stringValue
+    private func captureSessionID(from response: HTTPURLResponse) {
+        if let session = response.value(forHTTPHeaderField: "MCP-Session-Id"), !session.isEmpty {
+            cachedSessionID = session
+        }
+    }
+
+    private func decodeHTTPBody(_ data: Data, response: HTTPURLResponse) throws -> Data {
+        let contentType = response.value(forHTTPHeaderField: "Content-Type") ?? ""
+        if contentType.lowercased().contains("text/event-stream") {
+            return try MCPWireCodec.jsonRPCPayload(fromSSE: data)
+        }
+        return data
+    }
+}
+
+package struct MCPNotification: Sendable, Encodable, Equatable {
+    let jsonrpc: String
+    let method: String
+    let params: [String: SendableValue]?
+
+    init(method: String, params: [String: SendableValue]? = nil) throws {
+        guard !method.isEmpty else {
+            throw MCPError.invalidRequest("MCPNotification: method must be non-empty per JSON-RPC 2.0")
+        }
+
+        jsonrpc = "2.0"
+        self.method = method
+        self.params = params
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case jsonrpc
+        case method
+        case params
     }
 }

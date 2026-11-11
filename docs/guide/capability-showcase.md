@@ -10,16 +10,19 @@ It lives entirely in-package:
 
 ## Commands
 
+The full matrix (including durable Hive checkpointing) requires the
+`Integrations` SwiftPM trait. Lean default builds omit `durable`.
+
 ```bash
-swift run SwarmCapabilityShowcase list
-swift run SwarmCapabilityShowcase matrix
-swift run SwarmCapabilityShowcase run <scenario-id>
-swift run SwarmCapabilityShowcase smoke
+swift run --traits Integrations SwarmCapabilityShowcase list
+swift run --traits Integrations SwarmCapabilityShowcase matrix
+swift run --traits Integrations SwarmCapabilityShowcase run <scenario-id>
+swift run --traits Integrations SwarmCapabilityShowcase smoke
 ```
 
 ## Deterministic matrix
 
-`swift run SwarmCapabilityShowcase matrix` runs these scenarios without live network dependencies:
+`swift run --traits Integrations SwarmCapabilityShowcase matrix` runs these scenarios without live network dependencies:
 
 | Scenario | What it proves |
 | --- | --- |
@@ -32,10 +35,14 @@ swift run SwarmCapabilityShowcase smoke
 | `workspace` | `AgentWorkspace`, `Agent.onDevice`, `Agent.spec`, and `WorkspaceWriter` load and write correctly |
 | `guardrails` | input, output, and tool guardrails can pass and trip deterministically |
 | `resilience` | retry, fallback, rate limiting, and circuit breaker helpers behave correctly |
-| `durable` | durable workflow checkpoint and resume works with in-memory checkpointing |
+| `durable` | durable workflow checkpoint and resume (requires `Integrations` trait) |
 | `observability` | a custom tracer receives agent trace events |
 | `mcp` | MCP tool discovery and MCP tool bridging both execute locally |
 | `providers` | global provider config, per-agent override, and `MultiProvider` routing work |
+| `foundation-models` | First-class `.foundationModels()` factories, capability reporting, availability/degrade semantics, and Agent multi-turn/tool wiring used by on-device apps |
+| `voice` | Turn-based `VoiceSession` with scripted STT/TTS: one final transcript reaches the agent, output tokens are spoken, thinking is not |
+| `voice-bargein` | Opt-in barge-in: a scripted VAD interrupts hanging TTS and a replacement transcript is spoken |
+| `voice-workflow` | `VoiceTurnRuntime` as a `Workflow` step that speaks through `VoiceSession.respond(to:)` |
 
 Each scenario writes evidence into a temporary artifact directory under the system temp folder, rooted at `swarm-capability-showcase/`.
 
@@ -43,19 +50,23 @@ Each scenario writes evidence into a temporary artifact directory under the syst
 
 Smoke mode is for live integrations that should not gate CI.
 
-Current smoke scenario:
+Current smoke scenarios:
 
 | Scenario | Environment |
 | --- | --- |
-| `live-provider-smoke` | `SWARM_SHOWCASE_OLLAMA_MODEL` |
+| `live-provider-smoke` | Apple Foundation Models available on host |
+| `live-foundation-models-smoke` | `SWARM_SHOWCASE_FOUNDATION_MODELS=1` (or `SWARM_RUN_LIVE_FOUNDATION_MODELS_TESTS=1`) |
 
 Example:
 
 ```bash
-SWARM_SHOWCASE_OLLAMA_MODEL=llama3.2 swift run SwarmCapabilityShowcase smoke
+swift run SwarmCapabilityShowcase smoke  # requires Foundation Models on host
+SWARM_SHOWCASE_FOUNDATION_MODELS=1 swift run SwarmCapabilityShowcase smoke
 ```
 
 If the required environment variable is missing, the smoke scenario reports `skipped` instead of failing.
+
+The `foundation-models` **deterministic** scenario always runs in the matrix (including on Linux, where it documents graceful compile-time gating). Live on-device generation is only exercised by the opt-in smoke scenario.
 
 ## Tests
 

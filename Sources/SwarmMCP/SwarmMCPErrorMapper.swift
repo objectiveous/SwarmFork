@@ -1,3 +1,4 @@
+#if SWARM_MCP
 import Foundation
 import MCP
 import Swarm
@@ -204,13 +205,13 @@ enum SwarmMCPErrorMapper {
                     message: "Tool execution was cancelled."
                 )
             )
-        case let .toolExecutionFailed(_, underlyingError):
+        case let .toolFailure(_, message, cause):
             return .failure(
                 callToolErrorResult(
                     code: "execution_failed",
                     action: "inspect_error_and_retry",
                     toolName: toolName,
-                    message: underlyingError
+                    message: message ?? cause.map(String.init(describing:)) ?? "Tool execution failed."
                 )
             )
         default:
@@ -271,6 +272,7 @@ enum SwarmMCPErrorMapper {
     }
 
     private static func textContent(_ text: String) -> MCP.Tool.Content {
-        .text(text)
+        .text(text: text, annotations: nil, _meta: nil)
     }
 }
+#endif

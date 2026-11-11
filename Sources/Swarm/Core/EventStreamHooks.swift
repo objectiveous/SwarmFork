@@ -50,15 +50,13 @@ internal struct EventStreamObserver: AgentObserver {
     func onToolEnd(context _: AgentContext?, agent _: any AgentRuntime, result: ToolResult) async {
         let call = await toolCallStore.take(id: result.callId)
             ?? ToolCall(id: result.callId, toolName: "unknown", arguments: [:])
-        continuation.yield(.tool(.completed(call: call, result: result)))
+        emitToolCompletion(call: call, result: result)
+    }
 
-        if !result.isSuccess {
-            let errorMessage = result.errorMessage ?? "Unknown error"
-            continuation.yield(.tool(.failed(
-                call: call,
-                error: .toolExecutionFailed(toolName: call.toolName, underlyingError: errorMessage)
-            )))
-        }
+    func onToolEnd(context _: AgentContext?, agent _: any AgentRuntime, invocation: ToolInvocation) async {
+        _ = await toolCallStore.take(id: invocation.result.callId)
+        continuation.yield(.tool(.completed(invocation)))
+        emitFailedIfNeeded(call: invocation.call, result: invocation.result)
     }
 
     func onThinking(context _: AgentContext?, agent _: any AgentRuntime, thought: String) async {
@@ -92,7 +90,7 @@ internal struct EventStreamObserver: AgentObserver {
         continuation.yield(.handoff(.requested(from: fromName, to: toName, reason: nil)))
     }
 
-    func onLLMStart(context: AgentContext?, agent: any AgentRuntime, systemPrompt: String?, inputMessages: [MemoryMessage]) async {
+    func onLLMStart(context: AgentContext?, agent: any AgentRuntime, systemPrompt: String?, inputMessages: [InferenceMessage]) async {
         continuation.yield(.observation(.llmStarted(model: nil, promptTokens: nil)))
     }
 
@@ -102,6 +100,29 @@ internal struct EventStreamObserver: AgentObserver {
             promptTokens: usage?.inputTokens,
             completionTokens: usage?.outputTokens,
             duration: 0 // Duration not available without explicit tracking
+        )))
+    }
+
+    func onInferenceRetry(context _: AgentContext?, agent _: any AgentRuntime, attempt: Int, error: Error) async {
+        continuation.yield(.observation(.inferenceRetry(
+            attempt: attempt,
+            message: error.localizedDescription
+        )))
+    }
+
+    private func emitToolCompletion(call: ToolCall, result: ToolResult) {
+        continuation.yield(.tool(.completed(call: call, result: result)))
+        emitFailedIfNeeded(call: call, result: result)
+    }
+
+    private func emitFailedIfNeeded(call: ToolCall, result: ToolResult) {
+        guard !result.isSuccess else {
+            return
+        }
+        let errorMessage = result.errorMessage ?? "Unknown error"
+        continuation.yield(.tool(.failed(
+            call: call,
+            error: .toolFailure(toolName: call.toolName, message: errorMessage, cause: nil)
         )))
     }
 }

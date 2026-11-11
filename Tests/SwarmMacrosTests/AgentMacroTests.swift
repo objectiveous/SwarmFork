@@ -24,7 +24,6 @@ import XCTest
 final class AgentMacroTests: XCTestCase {
     // MARK: - Basic Agent Tests
 
-    // swiftlint:disable:next function_body_length
     func testBasicAgentExpansion() throws {
         #if canImport(SwarmMacros)
             assertMacroExpansion(
@@ -59,7 +58,7 @@ final class AgentMacroTests: XCTestCase {
                     }
 
                     private static func makeDefaultMemory() -> (any Memory)? {
-                        try? DefaultAgentMemory()
+                        try? Agent.makeDefaultMemory()
                     }
 
                     nonisolated public var inferenceProvider: (any InferenceProvider)? {
@@ -73,6 +72,8 @@ final class AgentMacroTests: XCTestCase {
                     private nonisolated let _tracer: (any Tracer)?
 
                     private var isCancelled: Bool = false
+
+                    private var lastTokenUsage: TokenUsage?
 
                     public init(
                         tools: [any AnyJSONTool] = [],
@@ -102,7 +103,6 @@ final class AgentMacroTests: XCTestCase {
 
                         let activeTracer = tracer ?? AgentEnvironmentValues.current.tracer
                         let activeMemory = resolvedMemory()
-                        let lifecycleMemory = activeMemory as? any MemorySessionLifecycle
 
                         let tracing = TracingHelper(
                             tracer: activeTracer,
@@ -112,12 +112,13 @@ final class AgentMacroTests: XCTestCase {
 
                         await observer?.onAgentStart(context: nil, agent: self, input: input)
 
-                        if let lifecycleMemory {
-                            await lifecycleMemory.beginMemorySession()
+                        if let activeMemory {
+                            await activeMemory.beginMemorySession()
                         }
 
                         do {
                             isCancelled = false
+                            lastTokenUsage = nil
 
                             // Load conversation history from session (limit to recent messages)
                             var sessionHistory: [MemoryMessage] = []
@@ -129,15 +130,9 @@ final class AgentMacroTests: XCTestCase {
 
                             // Store in memory (for AI context) if available
                             if let mem = activeMemory {
-                                // Seed session history only once for a fresh memory instance.
-                                if session != nil, await mem.isEmpty, !sessionHistory.isEmpty {
-                                    if let replayAware = mem as? any MemorySessionReplayAware {
-                                        await replayAware.importSessionHistory(sessionHistory)
-                                    } else {
-                                        for msg in sessionHistory {
-                                            await mem.add(msg)
-                                        }
-                                    }
+                                // Seed session history only once when the memory is eligible.
+                                if session != nil {
+                                    await mem.seedSessionHistoryIfNeeded(sessionHistory)
                                 }
                                 await mem.add(userMessage)
                             }
@@ -168,23 +163,23 @@ final class AgentMacroTests: XCTestCase {
                                 toolResults: [],
                                 iterationCount: 1,
                                 duration: duration,
-                                tokenUsage: nil,
+                                tokenUsage: lastTokenUsage,
                                 metadata: [:]
                             )
 
                             await tracing.traceComplete(result: result)
                             await observer?.onAgentEnd(context: nil, agent: self, result: result)
 
-                            if let lifecycleMemory {
-                                await lifecycleMemory.endMemorySession()
+                            if let activeMemory {
+                                await activeMemory.endMemorySession()
                             }
 
                             return result
                         } catch {
                             await observer?.onError(context: nil, agent: self, error: error)
                             await tracing.traceError(error)
-                            if let lifecycleMemory {
-                                await lifecycleMemory.endMemorySession()
+                            if let activeMemory {
+                                await activeMemory.endMemorySession()
                             }
                             throw error
                         }
@@ -322,7 +317,6 @@ final class AgentMacroTests: XCTestCase {
         #endif
     }
 
-    // swiftlint:disable:next function_body_length
     func testAgentWithExistingTools() throws {
         #if canImport(SwarmMacros)
             assertMacroExpansion(
@@ -359,7 +353,7 @@ final class AgentMacroTests: XCTestCase {
                     }
 
                     private static func makeDefaultMemory() -> (any Memory)? {
-                        try? DefaultAgentMemory()
+                        try? Agent.makeDefaultMemory()
                     }
 
                     nonisolated public var inferenceProvider: (any InferenceProvider)? {
@@ -373,6 +367,8 @@ final class AgentMacroTests: XCTestCase {
                     private nonisolated let _tracer: (any Tracer)?
 
                     private var isCancelled: Bool = false
+
+                    private var lastTokenUsage: TokenUsage?
 
                     public init(
                         tools: [any AnyJSONTool] = [],
@@ -402,7 +398,6 @@ final class AgentMacroTests: XCTestCase {
 
                         let activeTracer = tracer ?? AgentEnvironmentValues.current.tracer
                         let activeMemory = resolvedMemory()
-                        let lifecycleMemory = activeMemory as? any MemorySessionLifecycle
 
                         let tracing = TracingHelper(
                             tracer: activeTracer,
@@ -412,12 +407,13 @@ final class AgentMacroTests: XCTestCase {
 
                         await observer?.onAgentStart(context: nil, agent: self, input: input)
 
-                        if let lifecycleMemory {
-                            await lifecycleMemory.beginMemorySession()
+                        if let activeMemory {
+                            await activeMemory.beginMemorySession()
                         }
 
                         do {
                             isCancelled = false
+                            lastTokenUsage = nil
 
                             // Load conversation history from session (limit to recent messages)
                             var sessionHistory: [MemoryMessage] = []
@@ -429,15 +425,9 @@ final class AgentMacroTests: XCTestCase {
 
                             // Store in memory (for AI context) if available
                             if let mem = activeMemory {
-                                // Seed session history only once for a fresh memory instance.
-                                if session != nil, await mem.isEmpty, !sessionHistory.isEmpty {
-                                    if let replayAware = mem as? any MemorySessionReplayAware {
-                                        await replayAware.importSessionHistory(sessionHistory)
-                                    } else {
-                                        for msg in sessionHistory {
-                                            await mem.add(msg)
-                                        }
-                                    }
+                                // Seed session history only once when the memory is eligible.
+                                if session != nil {
+                                    await mem.seedSessionHistoryIfNeeded(sessionHistory)
                                 }
                                 await mem.add(userMessage)
                             }
@@ -468,23 +458,23 @@ final class AgentMacroTests: XCTestCase {
                                 toolResults: [],
                                 iterationCount: 1,
                                 duration: duration,
-                                tokenUsage: nil,
+                                tokenUsage: lastTokenUsage,
                                 metadata: [:]
                             )
 
                             await tracing.traceComplete(result: result)
                             await observer?.onAgentEnd(context: nil, agent: self, result: result)
 
-                            if let lifecycleMemory {
-                                await lifecycleMemory.endMemorySession()
+                            if let activeMemory {
+                                await activeMemory.endMemorySession()
                             }
 
                             return result
                         } catch {
                             await observer?.onError(context: nil, agent: self, error: error)
                             await tracing.traceError(error)
-                            if let lifecycleMemory {
-                                await lifecycleMemory.endMemorySession()
+                            if let activeMemory {
+                                await activeMemory.endMemorySession()
                             }
                             throw error
                         }
@@ -656,7 +646,6 @@ extension AgentMacroTests {
         #endif
     }
 
-    // swiftlint:disable:next function_body_length
     func testAgentWithoutProcessMethod() throws {
         #if canImport(SwarmMacros)
             // Agent without process method should still compile but run() throws
@@ -686,7 +675,7 @@ extension AgentMacroTests {
                     }
 
                     private static func makeDefaultMemory() -> (any Memory)? {
-                        try? DefaultAgentMemory()
+                        try? Agent.makeDefaultMemory()
                     }
 
                     nonisolated public var inferenceProvider: (any InferenceProvider)? {
@@ -700,6 +689,8 @@ extension AgentMacroTests {
                     private nonisolated let _tracer: (any Tracer)?
 
                     private var isCancelled: Bool = false
+
+                    private var lastTokenUsage: TokenUsage?
 
                     public init(
                         tools: [any AnyJSONTool] = [],

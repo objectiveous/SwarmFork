@@ -1,6 +1,13 @@
 import Foundation
 
 /// Provider-agnostic structured output request owned by Swarm.
+///
+/// ``jsonObject`` asks for any JSON value via prompt instruction; it cannot be
+/// lowered onto Foundation Models `GenerationSchema` (no property set to
+/// guide). ``jsonSchema(name:schemaJSON:)`` uses native guided generation when
+/// the schema is inside the documented GenerationSchema subset; otherwise the
+/// same prompt+parse path runs and ``StructuredOutputResult/source`` stays
+/// ``StructuredOutputResult/Source/promptFallback``.
 public enum StructuredOutputFormat: Sendable, Equatable, Codable {
     case jsonObject
     case jsonSchema(name: String, schemaJSON: String)
@@ -27,6 +34,16 @@ public enum StructuredOutputFormat: Sendable, Equatable, Codable {
 /// Swarm-owned request for a structured response.
 public struct StructuredOutputRequest: Sendable, Equatable, Codable {
     public var format: StructuredOutputFormat
+    /// Whether JSON parse failure is fatal on the untyped
+    /// ``Agent/runStructured(_:request:session:observer:)`` path.
+    ///
+    /// The default `true` throws ``AgentError/generationFailed(reason:)`` when
+    /// the assistant text is not valid JSON. When `false`, parse failure
+    /// returns ``StructuredAgentResult`` whose ``StructuredOutputResult/value``
+    /// is `.null` and ``StructuredOutputResult/rawJSON`` is the assistant text.
+    /// Typed ``Agent/runStructured(_:_:request:session:observer:)`` still throws
+    /// ``AgentError/structuredOutputDecodingFailed(reason:underlying:)`` if
+    /// `Output` cannot be decoded.
     public var required: Bool
 
     public init(format: StructuredOutputFormat, required: Bool = true) {
@@ -37,6 +54,13 @@ public struct StructuredOutputRequest: Sendable, Equatable, Codable {
 
 /// Parsed structured output emitted by a provider or Swarm fallback path.
 public struct StructuredOutputResult: Sendable, Equatable, Codable {
+    /// How the JSON was produced.
+    ///
+    /// - ``providerNative``: the inference backend constrained generation
+    ///   (Foundation Models `respond(to:schema:)` when the schema maps).
+    /// - ``promptFallback``: Swarm appended JSON instructions and parsed the
+    ///   reply. Used for ``StructuredOutputFormat/jsonObject``, unmappable
+    ///   schemas, and providers without guided generation.
     public enum Source: String, Sendable, Equatable, Codable {
         case providerNative = "provider_native"
         case promptFallback = "prompt_fallback"
@@ -45,6 +69,9 @@ public struct StructuredOutputResult: Sendable, Equatable, Codable {
     public var format: StructuredOutputFormat
     public var rawJSON: String
     public var value: SendableValue
+    /// Which production path emitted ``rawJSON``. Survives on
+    /// ``StructuredAgentResult/structuredOutput`` and as
+    /// `structured_output.source` on ``AgentResult/metadata``.
     public var source: Source
 
     public init(
@@ -68,6 +95,50 @@ public struct StructuredAgentResult: Sendable, Equatable {
     public init(agentResult: AgentResult, structuredOutput: StructuredOutputResult) {
         self.agentResult = agentResult
         self.structuredOutput = structuredOutput
+    }
+}
+
+/// Agent result plus a decoded structured payload.
+///
+/// Returned by ``Agent/runStructured(_:_:request:session:observer:)`` when the
+/// caller supplies an `Output` type. ``StructuredAgentResult`` remains the
+/// untyped companion from the non-generic
+/// ``Agent/runStructured(_:request:session:observer:)``.
+public struct DecodedStructuredAgentResult<Output: Sendable>: Sendable {
+    /// The completed agent run.
+    public let agentResult: AgentResult
+    /// Parsed JSON as ``SendableValue``, plus the raw text decoded as `Output`.
+    public let structuredOutput: StructuredOutputResult
+    /// The decoded `Output` value.
+    public let output: Output
+
+    public init(
+        agentResult: AgentResult,
+        structuredOutput: StructuredOutputResult,
+        output: Output
+    ) {
+        self.agentResult = agentResult
+        self.structuredOutput = structuredOutput
+        self.output = output
+    }
+}
+
+extension DecodedStructuredAgentResult where Output: Decodable {
+    static func decoding(_ result: StructuredAgentResult, as type: Output.Type) throws -> Self {
+        do {
+            let data = Data(result.structuredOutput.rawJSON.utf8)
+            let output = try JSONDecoder().decode(type, from: data)
+            return Self(
+                agentResult: result.agentResult,
+                structuredOutput: result.structuredOutput,
+                output: output
+            )
+        } catch {
+            throw AgentError.structuredOutputDecodingFailed(
+                reason: "Failed to decode structured output as \(type)",
+                underlying: error
+            )
+        }
     }
 }
 
@@ -115,7 +186,12 @@ enum StructuredOutputParser {
     ) throws -> StructuredOutputResult {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let data = trimmed.data(using: .utf8) else {
-            throw AgentError.generationFailed(reason: "Structured output is not valid UTF-8")
+            return try parseFailure(
+                assistantText: text,
+                request: request,
+                source: source,
+                reason: "Structured output is not valid UTF-8"
+            )
         }
 
         do {
@@ -128,13 +204,40 @@ enum StructuredOutputParser {
                 source: source
             )
         } catch {
-            throw AgentError.generationFailed(
+            return try parseFailure(
+                assistantText: text,
+                request: request,
+                source: source,
                 reason: "Failed to parse structured output JSON: \(error.localizedDescription)"
             )
         }
     }
+
+    private static func parseFailure(
+        assistantText: String,
+        request: StructuredOutputRequest,
+        source: StructuredOutputResult.Source,
+        reason: String
+    ) throws -> StructuredOutputResult {
+        guard request.required == false else {
+            throw AgentError.generationFailed(reason: reason)
+        }
+        return StructuredOutputResult(
+            format: request.format,
+            rawJSON: assistantText,
+            value: .null,
+            source: source
+        )
+    }
 }
 
+/// Native structured-output prompt hook.
+///
+/// Agent dispatches from ``InferenceProviderCapabilities/structuredOutputs`` and
+/// ``InferenceProvider/generateStructured(messages:request:options:)``. This
+/// deprecated protocol remains as a source-compatible marker for existing
+/// providers; it is not the Agent dispatch seam.
+@available(*, deprecated, message: "Declare InferenceProviderCapabilities.structuredOutputs and override generateStructured on InferenceProvider")
 public protocol StructuredOutputInferenceProvider: InferenceProvider {
     func generateStructured(
         prompt: String,
@@ -143,34 +246,5 @@ public protocol StructuredOutputInferenceProvider: InferenceProvider {
     ) async throws -> StructuredOutputResult
 }
 
-public protocol StructuredOutputConversationInferenceProvider: ConversationInferenceProvider {
-    func generateStructured(
-        messages: [InferenceMessage],
-        request: StructuredOutputRequest,
-        options: InferenceOptions
-    ) async throws -> StructuredOutputResult
-}
-
-public extension InferenceProvider {
-    func generateStructured(
-        prompt: String,
-        request: StructuredOutputRequest,
-        options: InferenceOptions
-    ) async throws -> StructuredOutputResult {
-        let structuredPrompt = StructuredOutputPromptBuilder.appendInstruction(to: prompt, request: request)
-        let text = try await generate(prompt: structuredPrompt, options: options)
-        return try StructuredOutputParser.parse(text, request: request, source: .promptFallback)
-    }
-}
-
-public extension ConversationInferenceProvider {
-    func generateStructured(
-        messages: [InferenceMessage],
-        request: StructuredOutputRequest,
-        options: InferenceOptions
-    ) async throws -> StructuredOutputResult {
-        let structuredMessages = StructuredOutputPromptBuilder.appendInstruction(to: messages, request: request)
-        let text = try await generate(messages: structuredMessages, options: options)
-        return try StructuredOutputParser.parse(text, request: request, source: .promptFallback)
-    }
-}
+@available(*, deprecated, renamed: "InferenceProvider")
+public protocol StructuredOutputConversationInferenceProvider: ConversationInferenceProvider {}

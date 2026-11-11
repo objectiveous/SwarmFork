@@ -39,10 +39,18 @@ import Foundation
 ///
 /// ## Retryable Errors
 ///
-/// Some errors are transient and can be retried:
+/// Use ``AgentError/isRetryable`` (and ``InferenceRetryability/isRetryable(_:)``
+/// for any `Error`) to decide whether ``Agent`` may retry a provider inference
+/// failure. Transient:
 /// - ``rateLimitExceeded(retryAfter:)``
 /// - ``inferenceProviderUnavailable(reason:)``
 /// - ``generationFailed(reason:)``
+/// - ``embeddingFailed(reason:)``
+///
+/// ``timeout(duration:)`` is **not** retryable — it is the run deadline.
+/// Provider timeouts arrive as ``generationFailed(reason:)`` or `URLError.timedOut`.
+/// Cancellation, guardrail rejection, schema/parse errors, and tool failures
+/// are never retried.
 ///
 /// ## Error Categories
 ///
@@ -54,22 +62,32 @@ import Foundation
 /// ### Execution Errors
 /// - ``cancelled``
 /// - ``maxIterationsExceeded(iterations:)``
+/// - ``toolCallLoopDetected(toolNames:repetitions:)``
 /// - ``timeout(duration:)``
 /// - ``invalidLoop(reason:)``
 ///
 /// ### Tool Errors
 /// - ``toolNotFound(name:)``
 /// - ``toolExecutionFailed(toolName:underlyingError:)``
+/// - ``toolFailure(toolName:message:cause:)``
 /// - ``invalidToolArguments(toolName:reason:)``
+///
+/// ### Handoff Identity Errors
+/// - ``duplicateHandoffToolName(name:)``
+/// - ``handoffToolNameCollidesWithTool(name:)``
 ///
 /// ### Model Errors
 /// - ``inferenceProviderUnavailable(reason:)``
+/// - ``authenticationFailed(reason:)``
 /// - ``contextWindowExceeded(tokenCount:limit:)``
 /// - ``guardrailViolation(reason:)``
 /// - ``contentFiltered(reason:)``
 /// - ``unsupportedLanguage(language:)``
 /// - ``generationFailed(reason:)``
 /// - ``modelNotAvailable(model:)``
+///
+/// ### Structured Output Errors
+/// - ``structuredOutputDecodingFailed(reason:underlying:)``
 ///
 /// ### Rate Limiting Errors
 /// - ``rateLimitExceeded(retryAfter:)``
@@ -80,7 +98,8 @@ import Foundation
 /// ### Internal Errors
 /// - ``agentNotFound(name:)``
 /// - ``internalError(reason:)``
-/// - ``toolCallingRequiresCloudProvider``
+/// - ``toolCallingUnsupported``
+/// - ``providerOwnedToolLoopRequiresExecutor``
 ///
 /// ## See Also
 /// - ``GuardrailError``
@@ -160,6 +179,37 @@ public enum AgentError: Error, Sendable, Equatable {
     /// - Parameter iterations: The number of iterations that were performed
     ///                         before the limit was exceeded
     case maxIterationsExceeded(iterations: Int)
+
+    /// The model repeated the same tool call batch consecutively.
+    ///
+    /// This error is thrown when the model produces
+    /// ``AgentConfiguration/maxConsecutiveToolRepeats`` identical
+    /// tool-call batches in a row. It typically indicates:
+    /// - The tool result does not contain what the model needs
+    /// - The model is retrying a failing call instead of adapting
+    /// - The task needs rephrasing or different tools
+    ///
+    /// The run stops **before** executing the repeated batch again, so
+    /// this error surfaces earlier and more precisely than
+    /// ``maxIterationsExceeded(iterations:)``.
+    ///
+    /// ## Recovery
+    ///
+    /// Inspect the latest tool result and rephrase the task, or allow
+    /// more repetitions:
+    ///
+    /// ```swift
+    /// let config = AgentConfiguration.default
+    ///     .maxConsecutiveToolRepeats(5)
+    /// ```
+    ///
+    /// ## Note
+    /// This error is non-retryable. Re-running the same turn repeats the loop.
+    ///
+    /// - Parameters:
+    ///   - toolNames: Tool names in the repeated batch, in call order.
+    ///   - repetitions: How many consecutive identical batches were observed.
+    case toolCallLoopDetected(toolNames: [String], repetitions: Int)
 
     /// The agent execution timed out.
     ///
@@ -262,7 +312,37 @@ public enum AgentError: Error, Sendable, Equatable {
     /// - Parameters:
     ///   - toolName: The name of the tool that failed
     ///   - underlyingError: A string description of the underlying error
+    @available(*, deprecated, message: "Use toolFailure(toolName:message:cause:) to preserve the original error instance.")
     case toolExecutionFailed(toolName: String, underlyingError: String)
+
+    /// A tool invocation failed.
+    ///
+    /// This error is thrown when a tool's execution raises an error. Unlike the
+    /// deprecated `toolExecutionFailed(toolName:underlyingError:)` case, it keeps
+    /// the original error instance reachable through `cause`, so callers can
+    /// inspect types, retryability, and nested domains instead of a flattened
+    /// string.
+    ///
+    /// ## Recovery
+    ///
+    /// ```swift
+    /// } catch let error as AgentError {
+    ///     if case .toolFailure(_, _, let cause) = error {
+    ///         if let cause, InferenceRetryability.isRetryable(cause) {
+    ///             // Retry with backoff
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// - Parameters:
+    ///   - toolName: The name of the tool that failed
+    ///   - message: Human-readable summary; include one when no underlying
+    ///     error instance exists (for example, configuration or trait-gate
+    ///     failures). May be `nil` when `cause` carries enough context.
+    ///   - cause: The original error raised by the tool, when one exists.
+    ///     `nil` is valid for failures synthesized from strings alone.
+    case toolFailure(toolName: String, message: String?, cause: (any Error)?)
 
     /// Invalid arguments were provided to a tool.
     ///
@@ -295,6 +375,46 @@ public enum AgentError: Error, Sendable, Equatable {
     ///   - reason: A description of why the arguments were invalid
     case invalidToolArguments(toolName: String, reason: String)
 
+    // MARK: - Handoff Identity Errors
+
+    /// Two handoffs resolved to the same LLM-facing tool name.
+    ///
+    /// This error is thrown at `Agent` initialization when effective handoff
+    /// tool names are not unique. The default name is derived from the target
+    /// runtime's type, so two ``Agent`` values without `toolNameOverride` always
+    /// collide as `handoff_to_agent`.
+    ///
+    /// ## Recovery
+    ///
+    /// Give each handoff a unique override:
+    ///
+    /// ```swift
+    /// let triage = try Agent(
+    ///     "Route requests.",
+    ///     handoffs: [
+    ///         AnyHandoffConfiguration(targetAgent: billing, toolNameOverride: "handoff_to_billing"),
+    ///         AnyHandoffConfiguration(targetAgent: support, toolNameOverride: "handoff_to_support"),
+    ///     ]
+    /// )
+    /// ```
+    ///
+    /// - Parameter name: The colliding effective handoff tool name
+    case duplicateHandoffToolName(name: String)
+
+    /// A handoff's effective tool name equals a registered tool name.
+    ///
+    /// This error is thrown at `Agent` initialization when a handoff would be
+    /// advertised under the same name as a tool, whether that tool is enabled
+    /// or disabled. The collision would make the LLM tool list ambiguous and
+    /// dispatch undefined.
+    ///
+    /// ## Recovery
+    ///
+    /// Rename the tool or pass a distinct `toolNameOverride` on the handoff.
+    ///
+    /// - Parameter name: The shared tool and handoff name
+    case handoffToolNameCollidesWithTool(name: String)
+
     // MARK: - Model Errors
 
     /// The inference provider is not available.
@@ -320,6 +440,28 @@ public enum AgentError: Error, Sendable, Equatable {
     ///
     /// - Parameter reason: A description of why the provider is unavailable
     case inferenceProviderUnavailable(reason: String)
+
+    /// The provider rejected the request credentials.
+    ///
+    /// This error is thrown when:
+    /// - The API key is missing, invalid, or expired (HTTP 401)
+    /// - The credentials lack access to the requested model or organization (HTTP 403)
+    ///
+    /// ## Recovery
+    ///
+    /// Check the configured credentials and their access scope:
+    ///
+    /// ```swift
+    /// } catch AgentError.authenticationFailed(let reason) {
+    ///     print("Check your API key: \(reason)")
+    /// }
+    /// ```
+    ///
+    /// ## Note
+    /// This error is non-retryable. Retrying with the same credentials fails again.
+    ///
+    /// - Parameter reason: A description of why authentication failed
+    case authenticationFailed(reason: String)
 
     /// The model context window was exceeded.
     ///
@@ -459,6 +601,24 @@ public enum AgentError: Error, Sendable, Equatable {
     /// - Parameter model: The name of the unavailable model
     case modelNotAvailable(model: String)
 
+    // MARK: - Structured Output Errors
+
+    /// Decoding a typed structured-output payload failed.
+    ///
+    /// Thrown by ``Agent/runStructured(_:_:request:session:observer:)`` when
+    /// ``StructuredOutputResult/rawJSON`` cannot be decoded as the requested
+    /// `Output` type. JSON parse failures on the non-generic path still throw
+    /// ``generationFailed(reason:)`` when ``StructuredOutputRequest/required``
+    /// is `true`.
+    ///
+    /// The `underlying` error is compared in ``==`` by dynamic type and
+    /// description, matching ``toolFailure(toolName:message:cause:)``.
+    ///
+    /// - Parameters:
+    ///   - reason: Human-readable summary of the decode failure.
+    ///   - underlying: The original decode error, when one exists.
+    case structuredOutputDecodingFailed(reason: String, underlying: (any Error)?)
+
     // MARK: - Rate Limiting Errors
 
     /// Rate limit was exceeded.
@@ -554,29 +714,121 @@ public enum AgentError: Error, Sendable, Equatable {
     /// - Parameter reason: A description of the internal error
     case internalError(reason: String)
 
-    /// Tool calling was requested but the selected provider path could not satisfy it.
+    /// Tool calling was requested but the selected provider could not satisfy it.
     ///
     /// This error is thrown when:
-    /// - A local provider is configured but the request requires cloud-based tool calling
-    /// - The provider doesn't support native tool calling and prompt-based emulation is disabled
+    /// - The provider does not support native tool calling
     /// - The tool calling schema is incompatible with the provider
     ///
     /// ## Recovery
     ///
-    /// Configure a cloud provider with native tool support:
+    /// Pass a tool-capable `InferenceProvider` (for example Apple Foundation Models
+    /// with native tools) via the agent or global configuration:
     ///
     /// ```swift
-    /// Swarm.configure(cloudProvider: openAIProvider)
-    ///
-    /// // Or enable prompt-based tool emulation
-    /// let config = AgentConfiguration(
-    ///     allowPromptBasedTools: true
-    /// )
+    /// await Swarm.configure(provider: myToolCapableProvider)
+    /// // or
+    /// let agent = try Agent("…", inferenceProvider: myToolCapableProvider)
     /// ```
     ///
     /// ## Note
     /// See ``recoverySuggestion`` for the default recovery suggestion.
-    case toolCallingRequiresCloudProvider
+    case toolCallingUnsupported
+
+    /// The adapter was constructed to own the tool loop but the call omitted a tool executor.
+    ///
+    /// Agent always passes a ``ToolCallExecutor`` when Capabilities includes
+    /// ``InferenceProviderCapabilities/providerOwnedToolLoop``. Direct callers of
+    /// ``InferenceProvider/generateWithToolCalls(messages:tools:options:toolExecutor:)``
+    /// must do the same.
+    case providerOwnedToolLoopRequiresExecutor
+
+    /// Element-wise equality. The `toolFailure` cause and
+    /// `structuredOutputDecodingFailed` underlying error compare by dynamic type
+    /// and description because `(any Error)?` has no structural equality.
+    public static func == (lhs: AgentError, rhs: AgentError) -> Bool {
+        switch (lhs, rhs) {
+        case let (.invalidInput(a), .invalidInput(b)):
+            a == b
+        case (.cancelled, .cancelled):
+            true
+        case let (.maxIterationsExceeded(a), .maxIterationsExceeded(b)):
+            a == b
+        case let (.toolCallLoopDetected(n1, r1), .toolCallLoopDetected(n2, r2)):
+            n1 == n2 && r1 == r2
+        case let (.timeout(a), .timeout(b)):
+            a == b
+        case let (.invalidLoop(a), .invalidLoop(b)):
+            a == b
+        case let (.toolNotFound(a), .toolNotFound(b)):
+            a == b
+        case let (.toolExecutionFailed(a1, a2), .toolExecutionFailed(b1, b2)):
+            a1 == b1 && a2 == b2
+        case let (.toolFailure(n1, m1, c1), .toolFailure(n2, m2, c2)):
+            n1 == n2 && m1 == m2 && Self.causeEquals(c1, c2)
+        case let (.invalidToolArguments(a1, a2), .invalidToolArguments(b1, b2)):
+            a1 == b1 && a2 == b2
+        case let (.duplicateHandoffToolName(a), .duplicateHandoffToolName(b)):
+            a == b
+        case let (.handoffToolNameCollidesWithTool(a), .handoffToolNameCollidesWithTool(b)):
+            a == b
+        case let (.inferenceProviderUnavailable(a), .inferenceProviderUnavailable(b)):
+            a == b
+        case let (.authenticationFailed(a), .authenticationFailed(b)):
+            a == b
+        case let (.contextWindowExceeded(a1, a2), .contextWindowExceeded(b1, b2)):
+            a1 == b1 && a2 == b2
+        case let (.guardrailViolation(a), .guardrailViolation(b)):
+            a == b
+        case let (.contentFiltered(a), .contentFiltered(b)):
+            a == b
+        case let (.unsupportedLanguage(a), .unsupportedLanguage(b)):
+            a == b
+        case let (.generationFailed(a), .generationFailed(b)):
+            a == b
+        case let (.modelNotAvailable(a), .modelNotAvailable(b)):
+            a == b
+        case let (.structuredOutputDecodingFailed(r1, u1), .structuredOutputDecodingFailed(r2, u2)):
+            r1 == r2 && Self.causeEquals(u1, u2)
+        case let (.rateLimitExceeded(a), .rateLimitExceeded(b)):
+            a == b
+        case let (.embeddingFailed(a), .embeddingFailed(b)):
+            a == b
+        case let (.agentNotFound(a), .agentNotFound(b)):
+            a == b
+        case let (.internalError(a), .internalError(b)):
+            a == b
+        case (.toolCallingUnsupported, .toolCallingUnsupported):
+            true
+        case (.providerOwnedToolLoopRequiresExecutor, .providerOwnedToolLoopRequiresExecutor):
+            true
+        default:
+            false
+        }
+    }
+
+    private static func causeTypeName(_ error: (any Error)?) -> String {
+        error.map { String(describing: type(of: $0)) } ?? "nil"
+    }
+
+    private static func causeMessage(reason: String, underlying: (any Error)?) -> String {
+        if reason.isEmpty == false {
+            return reason
+        }
+        return underlying.map(String.init(describing:)) ?? "unknown error"
+    }
+
+    private static func causeEquals(_ lhs: (any Error)?, _ rhs: (any Error)?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil):
+            true
+        case let (a?, b?):
+            String(describing: type(of: a)) == String(describing: type(of: b))
+                && String(describing: a) == String(describing: b)
+        default:
+            false
+        }
+    }
 }
 
 // MARK: - LocalizedError
@@ -595,6 +847,8 @@ extension AgentError: LocalizedError {
             "Agent execution was cancelled"
         case let .maxIterationsExceeded(iterations):
             "Agent exceeded maximum iterations (\(iterations))"
+        case let .toolCallLoopDetected(toolNames, repetitions):
+            "Tool call loop detected: \(toolNames.joined(separator: ", ")) repeated \(repetitions) times"
         case let .timeout(duration):
             "Agent execution timed out after \(duration)"
         case let .invalidLoop(reason):
@@ -603,10 +857,18 @@ extension AgentError: LocalizedError {
             "Tool not found: \(name)"
         case let .toolExecutionFailed(toolName, underlyingError):
             "Tool '\(toolName)' failed: \(underlyingError)"
+        case let .toolFailure(toolName, message, cause):
+            "Tool '\(toolName)' failed: \(message ?? cause.map(String.init(describing:)) ?? "unknown error")"
         case let .invalidToolArguments(toolName, reason):
             "Invalid arguments for tool '\(toolName)': \(reason)"
+        case let .duplicateHandoffToolName(name):
+            "Duplicate handoff tool name: '\(name)'"
+        case let .handoffToolNameCollidesWithTool(name):
+            "Handoff tool name collides with a registered tool: '\(name)'"
         case let .inferenceProviderUnavailable(reason):
             "Inference provider unavailable: \(reason)"
+        case let .authenticationFailed(reason):
+            "Authentication failed: \(reason)"
         case let .contextWindowExceeded(count, limit):
             "Context window exceeded: \(count) tokens (limit: \(limit))"
         case let .guardrailViolation(reason):
@@ -619,6 +881,8 @@ extension AgentError: LocalizedError {
             "Generation failed: \(reason)"
         case let .modelNotAvailable(model):
             "Model not available: \(model)"
+        case let .structuredOutputDecodingFailed(reason, underlying):
+            "Structured output decoding failed: \(Self.causeMessage(reason: reason, underlying: underlying))"
         case let .rateLimitExceeded(retryAfter):
             if let retryAfter {
                 "Rate limit exceeded, retry after \(retryAfter) seconds"
@@ -631,8 +895,10 @@ extension AgentError: LocalizedError {
             "Agent not found: '\(name)'"
         case let .internalError(reason):
             "Internal error: \(reason)"
-        case .toolCallingRequiresCloudProvider:
+        case .toolCallingUnsupported:
             "The selected provider could not satisfy this tool calling request."
+        case .providerOwnedToolLoopRequiresExecutor:
+            "This InferenceProvider owns the tool loop and requires a tool executor."
         }
     }
 
@@ -642,13 +908,17 @@ extension AgentError: LocalizedError {
     /// specific error cases. Not all errors include recovery suggestions.
     ///
     /// ## See Also
-    /// - ``AgentError/toolCallingRequiresCloudProvider``
+    /// - ``AgentError/toolCallingUnsupported``
     public var recoverySuggestion: String? {
         switch self {
-        case .toolCallingRequiresCloudProvider:
-            "Configure `Swarm.configure(cloudProvider:)` or pass a provider with native tool-calling support if this request cannot rely on prompt-based tool emulation."
+        case .toolCallingUnsupported:
+            "Pass a provider with native tool-calling support via `Agent(..., inferenceProvider:)` or `await Swarm.configure(provider:)`, or use Apple Foundation Models on a supported device."
+        case .providerOwnedToolLoopRequiresExecutor:
+            "Pass a ToolCallExecutor on generateWithToolCalls/streamWithToolCalls, implement that overload if this adapter advertises providerOwnedToolLoop, or construct a capture adapter (.foundationModels()) if Agent should own the loop."
         case .inferenceProviderUnavailable:
-            "Check your network connection and API credentials, or try again later."
+            "Configure an inference provider via `await Swarm.configure(provider:)` or use Apple Foundation Models on a supported device."
+        case .authenticationFailed:
+            "Check that your API key is set, valid, and has access to the requested model."
         case .rateLimitExceeded(let retryAfter):
             if let seconds = retryAfter {
                 "Wait \(Int(seconds)) seconds before retrying the request."
@@ -663,10 +933,18 @@ extension AgentError: LocalizedError {
             "Check that '\(model)' is a valid model name and your API key has access to it."
         case .maxIterationsExceeded:
             "Increase the maxIterations configuration or break the task into smaller subtasks."
+        case .toolCallLoopDetected:
+            "Inspect the latest tool result and rephrase the task, or raise maxConsecutiveToolRepeats."
         case .timeout:
             "Increase the timeout duration or optimize the task to complete faster."
         case .invalidToolArguments(let toolName, _):
             "Review the tool '\(toolName)' documentation and ensure all required parameters are provided."
+        case .duplicateHandoffToolName(let name):
+            "Give each handoff a unique toolNameOverride; '\(name)' is used more than once."
+        case .handoffToolNameCollidesWithTool(let name):
+            "Rename the tool or set a distinct toolNameOverride so '\(name)' is not shared."
+        case .structuredOutputDecodingFailed:
+            "Ensure the model returned JSON that matches the requested Output type."
         default:
             nil
         }
@@ -689,6 +967,8 @@ extension AgentError: CustomDebugStringConvertible {
             "AgentError.cancelled"
         case let .maxIterationsExceeded(iterations):
             "AgentError.maxIterationsExceeded(iterations: \(iterations))"
+        case let .toolCallLoopDetected(toolNames, repetitions):
+            "AgentError.toolCallLoopDetected(toolNames: \(toolNames), repetitions: \(repetitions))"
         case let .timeout(duration):
             "AgentError.timeout(duration: \(duration))"
         case let .invalidLoop(reason):
@@ -697,10 +977,18 @@ extension AgentError: CustomDebugStringConvertible {
             "AgentError.toolNotFound(name: \(name))"
         case let .toolExecutionFailed(toolName, underlyingError):
             "AgentError.toolExecutionFailed(toolName: \(toolName), underlyingError: \(underlyingError))"
+        case let .toolFailure(toolName, message, cause):
+            "AgentError.toolFailure(toolName: \(toolName), message: \(message ?? "nil"), cause: \(cause.map { String(describing: type(of: $0)) } ?? "nil"))"
         case let .invalidToolArguments(toolName, reason):
             "AgentError.invalidToolArguments(toolName: \(toolName), reason: \(reason))"
+        case let .duplicateHandoffToolName(name):
+            "AgentError.duplicateHandoffToolName(name: \(name))"
+        case let .handoffToolNameCollidesWithTool(name):
+            "AgentError.handoffToolNameCollidesWithTool(name: \(name))"
         case let .inferenceProviderUnavailable(reason):
             "AgentError.inferenceProviderUnavailable(reason: \(reason))"
+        case let .authenticationFailed(reason):
+            "AgentError.authenticationFailed(reason: \(reason))"
         case let .contextWindowExceeded(tokenCount, limit):
             "AgentError.contextWindowExceeded(tokenCount: \(tokenCount), limit: \(limit))"
         case let .guardrailViolation(reason):
@@ -713,6 +1001,8 @@ extension AgentError: CustomDebugStringConvertible {
             "AgentError.generationFailed(reason: \(reason))"
         case let .modelNotAvailable(model):
             "AgentError.modelNotAvailable(model: \(model))"
+        case let .structuredOutputDecodingFailed(reason, underlying):
+            "AgentError.structuredOutputDecodingFailed(reason: \(reason), underlying: \(Self.causeTypeName(underlying)))"
         case let .rateLimitExceeded(retryAfter):
             "AgentError.rateLimitExceeded(retryAfter: \(String(describing: retryAfter)))"
         case let .embeddingFailed(reason):
@@ -721,8 +1011,52 @@ extension AgentError: CustomDebugStringConvertible {
             "AgentError.agentNotFound(name: \(name))"
         case let .internalError(reason):
             "AgentError.internalError(reason: \(reason))"
-        case .toolCallingRequiresCloudProvider:
-            "AgentError.toolCallingRequiresCloudProvider"
+        case .toolCallingUnsupported:
+            "AgentError.toolCallingUnsupported"
+        case .providerOwnedToolLoopRequiresExecutor:
+            "AgentError.providerOwnedToolLoopRequiresExecutor"
+        }
+    }
+}
+
+// MARK: - Retryability
+
+extension AgentError {
+    /// Whether ``Agent`` may retry this error on a **provider inference** call.
+    ///
+    /// See ``InferenceRetryability`` for the full classification table, including
+    /// non-`AgentError` types.
+    public var isRetryable: Bool {
+        switch self {
+        case .rateLimitExceeded,
+             .inferenceProviderUnavailable,
+             .generationFailed,
+             .embeddingFailed:
+            true
+        case .cancelled,
+             .timeout,
+             .authenticationFailed,
+             .invalidInput,
+             .invalidLoop,
+             .maxIterationsExceeded,
+             .toolCallLoopDetected,
+             .guardrailViolation,
+             .contentFiltered,
+             .invalidToolArguments,
+             .duplicateHandoffToolName,
+             .handoffToolNameCollidesWithTool,
+             .toolExecutionFailed,
+             .toolFailure,
+             .toolNotFound,
+             .contextWindowExceeded,
+             .unsupportedLanguage,
+             .modelNotAvailable,
+             .structuredOutputDecodingFailed,
+             .agentNotFound,
+             .internalError,
+             .toolCallingUnsupported,
+             .providerOwnedToolLoopRequiresExecutor:
+            false
         }
     }
 }

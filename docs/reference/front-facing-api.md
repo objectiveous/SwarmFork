@@ -2,6 +2,47 @@
 
 This document describes the V3 public API surface of Swarm.
 
+## Integrations trait
+
+Default package consumption is **lean** (Integrations off): core Swarm + Apple
+Foundation Models. Opt in for durable Hive workflows, ContextCore+Wax default
+memory, Membrane adapters, and web helpers:
+
+```swift
+.package(
+    url: "https://github.com/christopherkarani/Swarm.git",
+    from: "0.6.6",
+    traits: ["Integrations"]
+)
+```
+
+| Surface | Lean default | With Integrations |
+|---------|--------------|-------------------|
+| `Agent.makeDefaultMemory()` | `SlidingWindowMemory` | `DefaultAgentMemory` (ContextCore + Wax) |
+| Durable execute with checkpoint / `resumeFrom` | Warns at checkpoint factories; throws `durableRuntimeUnavailable` | Full Hive durable engine |
+| Membrane / web helpers | Unavailable or no-op; `WebSearchTool` warns at init and throws on execute | Linked and active |
+| Default semantic embeddings | n/a (lean uses `SlidingWindowMemory`) | `DefaultAgentMemory.isSemanticMemoryAvailable` is `false` until `SemanticEmbeddingAvailability.ensureModelAvailable()` (or a bundled/cached MiniLM)
+
+HiveCore, Membrane, and ContextCore are native in-tree `Sources/` targets
+(internal modules, not separate products), linked only with Integrations.
+Wax remains a remote package + trait-gated product. Lean resolve never pulls
+Hive/Membrane/ContextCore/Conduit package identities, and trait-gated product
+edges also keep Wax, MetalANNS→GRDB, swift-crypto, swift-mutex, SwiftSoup,
+the MCP Swift SDK, and OpenTelemetry off the lean pin list. Default remotes
+are **swift-syntax** (via the default-on **Macros** trait) and **swift-log**.
+Enable `traits: ["MCP"]` for `SwarmMCP`, or `traits: ["OpenTelemetry"]` for
+`SwarmOpenTelemetry`. Disable Macros with `traits: []` to drop swift-syntax
+and use ``FunctionTool`` instead of `@Tool`.
+`SWARM_CORE_ONLY=1` drops the integration package block. ContextCore and the
+full Membrane session stack link on all platforms with Integrations: Linux
+uses portable CPU scoring/compression engines, the brute-force vector index,
+hash embeddings, and passthrough/in-memory Membrane backends, while Apple
+builds accelerate with Metal/CoreML/Accelerate and MetalANNS. On Apple,
+`DefaultAgentMemory` (ContextCore + Wax) uses fallback pseudo-embeddings when
+MiniLM is not cached or bundled, logs a once-per-process warning naming
+`SemanticEmbeddingAvailability.ensureModelAvailable()`, and exposes
+`DefaultAgentMemory.isSemanticMemoryAvailable`. See README Install.
+
 ## 1) Entry point and global configuration
 
 ```swift
@@ -14,11 +55,9 @@ public enum Swarm {
 }
 
 await Swarm.configure(provider: some InferenceProvider)
-await Swarm.configure(cloudProvider: some InferenceProvider)
 await Swarm.reset()
 
 let defaultProvider = await Swarm.defaultProvider
-let cloudProvider = await Swarm.cloudProvider
 ```
 
 ## 2) Core runtime protocol
@@ -40,6 +79,13 @@ public protocol AgentRuntime: Sendable {
     nonisolated func stream(_ input: String, session: (any Session)?, observer: (any AgentObserver)?) -> AsyncThrowingStream<AgentEvent, Error>
 
     func cancel() async
+
+    func handleHandoff(
+        _ request: HandoffRequest,
+        context: AgentContext,
+        session: (any Session)?,
+        observer: (any AgentObserver)?
+    ) async throws -> AgentResult
 }
 ```
 
@@ -60,7 +106,9 @@ The concrete agent type. Creates an immutable configuration; execution state liv
 public struct Agent: AgentRuntime
 ```
 
-### Canonical initializer
+### Low-level compatibility initializer
+
+This initializer remains public for compatibility and generated collections. Most application code should prefer the V3 initializer in section 4, which takes unlabeled instructions and a trailing `@ToolBuilder` closure.
 
 ```swift
 try Agent(
@@ -109,6 +157,8 @@ try Agent(
 )
 ```
 
+Effective handoff tool names must be unique among themselves and must not equal a registered tool `name` (enabled or not). Two `Agent` values passed as `handoffAgents:` without overrides collide as `handoff_to_agent` and throw `AgentError.duplicateHandoffToolName`. A colliding tool throws `AgentError.handoffToolNameCollidesWithTool`. The same checks run on `withHandoffs`, `withTools`, and `Agent.Builder` handoff setters. Give each handoff a distinct `toolNameOverride` when targets share a runtime type.
+
 ## 4) Agent (V3 canonical init with @ToolBuilder)
 
 The recommended path for creating agents in V3. Takes an unlabeled instructions string and a `@ToolBuilder` trailing closure for tools. All other parameters are init arguments, not modifier methods.
@@ -144,7 +194,7 @@ let agent = try Agent(
     "You are a helpful assistant.",
     configuration: .init(name: "Assistant"),
     memory: .conversation(maxMessages: 50),
-    inferenceProvider: .anthropic(key: "sk-..."),
+    inferenceProvider: .foundationModels(),
     inputGuardrails: [MaxInputLengthGuardrail(maxLength: 5000)],
     handoffs: [AnyHandoffConfiguration(targetAgent: supportAgent)]
 ) {
@@ -168,14 +218,100 @@ let agent = try Agent(
 | `handoffs` | `[AnyHandoffConfiguration]` | `[]` | Handoff targets for multi-agent orchestration |
 | `tools` | `@ToolBuilder () -> ToolCollection` | `{ .empty }` | Trailing closure producing the agent's tools |
 
-### Runtime modifiers (on AgentRuntime)
+### AgentConfiguration
 
-Only `.environment()` and `.memory()` exist as modifier methods, provided by `AgentRuntime` extensions:
+`AgentConfiguration` controls the agent loop and provider options. The default
+is conservative: streaming is enabled, tool failures are collected instead of
+immediately thrown, and capture-path tool calls are sequential. Set
+`parallelToolCalls(true)` only when same-turn tools are independent; Swarm then
+executes regular capture-path calls concurrently while preserving their input
+order in `AgentResult.toolCalls` and `AgentResult.toolResults`. Handoffs and
+membrane-internal calls remain ordered.
+
+`includeToolCallDetails` and `includeReasoning` are retained compatibility
+settings and currently have no effect. Tool details are always represented by
+`AgentResult.toolCalls` / `AgentResult.toolResults`; provider-emitted reasoning
+uses `AgentEvent.output(.thinking(...))` or `.thinkingPartial(...)`.
+
+### Resilience (inference only)
+
+`AgentConfiguration.resilience` is additive and defaults to ``ResilienceConfiguration/disabled`` (``RetryPolicy/noRetry``, no breaker, no limiter). That default is a no-op.
+
+When configured, ``Agent/run`` applies **rate-limit acquire → circuit-breaker → retry** around **provider inference** only. Tool execution is never retried. Retries consume the remaining ``AgentConfiguration/timeout`` budget and cannot outlive the run. Circuit-breaker and rate-limiter actors are scoped **per Agent instance**, shared across that instance's runs.
 
 ```swift
-agent.environment(\.inferenceProvider, myProvider)  // returns EnvironmentAgent
-agent.observed(by: myObserver)                      // returns some AgentRuntime
+let config = AgentConfiguration.default
+    .resilience(ResilienceConfiguration(
+        retryPolicy: .standard,
+        circuitBreaker: CircuitBreakerSettings(failureThreshold: 5),
+        rateLimit: RateLimitSettings(maxRequestsPerMinute: 60)
+    ))
 ```
+
+Retryability is ``InferenceRetryability/isRetryable(_:)`` **and** the policy's `shouldRetry` (default: always). Permanent failures in that table are never retried. A server `Retry-After` hint carried by ``AgentError/rateLimitExceeded(retryAfter:)`` extends the policy backoff (never shortens it).
+
+For provider fallback, compose ``FailoverProvider`` and pass it as the agent's inference provider — it advances across `primary` + `fallbacks` on retryable failures only, rethrows the last error when exhausted, and stays out of `Agent`'s own retry wrapper. ``FallbackChain`` remains the escape hatch for custom operations.
+
+### Loop safety
+
+The tool loop fingerprints every tool-call batch (tool names plus canonical arguments) and stops the run with ``AgentError/toolCallLoopDetected(toolNames:repetitions:)`` after ``AgentConfiguration/maxConsecutiveToolRepeats`` (default: 3) consecutive identical batches, before executing the repeat again. Tune with `.maxConsecutiveToolRepeats(_:)` (floor: 2).
+
+`RetryPolicy.maxAttempts` counts total attempts including the initial attempt and must be at least 1 (`noRetry` is 1; `standard` is 3 total; `aggressive` is 5 total). The same budget is shared by `AsyncThrowingStream.retry(maxAttempts:delay:factory:)` and `HiveRetryPolicy`. Values below 1 throw `ResilienceError.invalidMaxAttempts` from `RetryPolicy.execute` (or fail the stream) without invoking the operation.
+
+### Runtime wrappers (on AgentRuntime)
+
+Core runtime wrappers are provided by `AgentRuntime` extensions:
+
+```swift
+agent.environment(\.inferenceProvider, myProvider)      // returns EnvironmentAgent
+agent.memory(.conversation(maxMessages: 50))            // returns EnvironmentAgent
+agent.promptTokenCounter(myCounter)                     // returns EnvironmentAgent
+agent.webSearch(WebSearchTool.Configuration(enabled: false))
+agent.observed(by: myObserver)                          // returns some AgentRuntime
+```
+
+### Structured output
+
+`Agent.runStructured` has an untyped path and an additive typed overload.
+`StructuredAgentResult` is unchanged. Pass an `Output.Type` to decode
+`structuredOutput.rawJSON` once inside Swarm:
+
+```swift
+public struct StructuredAgentResult: Sendable, Equatable {
+    public let agentResult: AgentResult
+    public let structuredOutput: StructuredOutputResult
+}
+
+public struct DecodedStructuredAgentResult<Output: Sendable>: Sendable {
+    public let agentResult: AgentResult
+    public let structuredOutput: StructuredOutputResult
+    public let output: Output
+}
+
+public func runStructured(
+    _ input: String,
+    request: StructuredOutputRequest,
+    session: (any Session)? = nil,
+    observer: (any AgentObserver)? = nil
+) async throws -> StructuredAgentResult
+
+public func runStructured<Output: Decodable & Sendable>(
+    _ type: Output.Type,
+    _ input: String,
+    request: StructuredOutputRequest,
+    session: (any Session)? = nil,
+    observer: (any AgentObserver)? = nil
+) async throws -> DecodedStructuredAgentResult<Output>
+```
+
+`StructuredOutputRequest.required` defaults to `true` (throw on JSON parse
+failure). When `required` is `false`, the non-generic path does not throw:
+`structuredOutput.value` is `.null` and `rawJSON` is the assistant text. The
+generic `runStructured<Output>` overload still throws
+`AgentError.structuredOutputDecodingFailed` if `Output` cannot be decoded.
+
+`MultiProvider` overrides both `generateStructured` overloads and forwards to
+the routed child with the same resolve rules as `generate(messages:)`.
 
 ## 5) Tool and FunctionTool
 
@@ -190,6 +326,8 @@ struct PriceTool {
 }
 ```
 
+Parameter types map from Swift: `String`, `Int`, `Double`/`Float`, `Bool`, arrays of those (`[T]` or `Array<T>`), and `Optional` thereof. Unsupported types — including `[String: T]` dictionaries — are compile errors. Use `@Parameter(oneOf:)` for string enums, or `FunctionTool` for objects, dictionaries, and `.any`.
+
 ### `FunctionTool` (closure shorthand)
 
 ```swift
@@ -203,6 +341,21 @@ let greet = FunctionTool(
 }
 ```
 
+`ToolArguments.require`, `optional`, and `optionalValue` extract
+`ToolArgumentValue` types. The built-in lattice is `String`, `Int`, `Double`,
+and `Bool`, and it is open: any `Sendable` type (such as `URL`) can conform by
+implementing `extract(from:)`. Extraction is exact-case with no coercion, so
+apply schema-driven coercion first with `normalizeArguments(_:)`, then extract.
+`require` throws when a key is missing or mistyped, `optional` returns `nil` in
+both cases, and `optionalValue` returns `nil` only when the key is missing.
+`SendableValue.decode()` remains unconstrained for `Decodable` payloads.
+
+`ToolExecutionSemantics.runtimePolicy()` is the public derivation of retry,
+approval, and parallel eligibility. ``ToolExecutionSemantics/automatic`` stays
+approval-free and parallel-eligible. `ParallelToolExecutor` serializes each
+explicit `externalMutation` so it does not overlap another call; consecutive
+parallel-eligible tools still run concurrently.
+
 ### `@ToolBuilder` result builder
 
 Used as the trailing closure in the canonical `Agent` init. No brackets, no commas:
@@ -215,6 +368,37 @@ Agent("instructions") {
 ```
 
 The builder produces an opaque `ToolCollection`; callers supply concrete `Tool` values or `[any Tool]`, and Swarm handles the internal type erasure.
+
+### `AnyJSONTool` (advanced interoperability seam)
+
+`AnyJSONTool` is public because dynamic tools and integrations need a stable
+wire-shaped capability. It is the type-erased tool value exchanged by `Agent`,
+`ToolRegistry`, and MCP discovery/bridge APIs. Prefer `Tool` and `@Tool` for
+application-authored tools; conform directly when a tool is created at runtime,
+comes from MCP, or cannot be represented by the typed protocol.
+
+```swift
+public protocol AnyJSONTool: Sendable {
+    var name: String { get }
+    var description: String { get }
+    var parameters: [ToolParameter] { get }
+    func execute(arguments: [String: SendableValue]) async throws -> SendableValue
+}
+
+let dynamicTool: any AnyJSONTool = FunctionTool(
+    name: "greet",
+    description: "Greets a person",
+    parameters: []
+) { _ in .string("Hello") }
+```
+
+`Tool.asAnyJSONTool()` and `AnyJSONToolAdapter` bridge typed tools to this seam.
+`MCPClient.getAllTools()` and `MCPToolBridge.bridgeTools()` return
+`[any AnyJSONTool]` for the same reason.
+
+`WebSearchTool` compiles on lean builds. Query `WebSearchTool.isAvailable` (or
+`IntegrationsTrait.isEnabled`) before constructing it; lean inits warn immediately
+and `execute` throws with the rebuild remedy.
 
 ## 6) Conversation
 
@@ -238,8 +422,16 @@ public actor Conversation {
 
     @discardableResult
     public func streamText(_ input: String) async throws -> String
+
+    public func branch() async throws -> Conversation
 }
 ```
+
+`send(_:)` appends the user message and final assistant result to the transcript.
+`stream(_:)` exposes raw events and does not mutate transcript history; use
+`streamText(_:)` when you want streamed text collected and appended. `branch()`
+creates an isolated conversation with the current transcript and, when supported
+by the runtime or session, branched execution state.
 
 ## 7) Workflow
 
@@ -247,10 +439,11 @@ Fluent multi-agent pipeline composition.
 
 ```swift
 public struct Workflow: Sendable {
-    public enum MergeStrategy: @unchecked Sendable {
+    public enum MergeStrategy: Sendable {
         case structured
         case indexed
-        case first
+        case firstCompleted
+        case first // deprecated, renamed: firstCompleted
         case custom(@Sendable ([AgentResult]) -> String)
     }
 
@@ -258,9 +451,39 @@ public struct Workflow: Sendable {
 
     // Composition
     public func step(_ agent: some AgentRuntime) -> Workflow
-    public func parallel(_ agents: [any AgentRuntime], merge: MergeStrategy = .structured) -> Workflow
-    public func route(_ condition: @escaping @Sendable (String) -> (any AgentRuntime)?) -> Workflow
-    public func repeatUntil(maxIterations: Int = 100, _ condition: @escaping @Sendable (AgentResult) -> Bool) -> Workflow
+    public func parallel(
+        _ agents: [any AgentRuntime],
+        merge: MergeStrategy = .structured,
+        customMergeSignature: String? = nil,
+        fileID: StaticString = #fileID,
+        line: UInt = #line
+    ) -> Workflow
+    public func route(
+        _ condition: @escaping @Sendable (String) -> (any AgentRuntime)?,
+        signature: String? = nil,
+        fileID: StaticString = #fileID,
+        line: UInt = #line
+    ) -> Workflow
+    public func route(
+        signature: String,
+        fileID: StaticString = #fileID,
+        line: UInt = #line,
+        _ condition: @escaping @Sendable (String) -> (any AgentRuntime)?
+    ) -> Workflow
+    public func repeatUntil(
+        maxIterations: Int = 100,
+        _ condition: @escaping @Sendable (AgentResult) -> Bool,
+        signature: String? = nil,
+        fileID: StaticString = #fileID,
+        line: UInt = #line
+    ) -> Workflow
+    public func repeatUntil(
+        maxIterations: Int = 100,
+        signature: String,
+        fileID: StaticString = #fileID,
+        line: UInt = #line,
+        _ condition: @escaping @Sendable (AgentResult) -> Bool
+    ) -> Workflow
     public func timeout(_ duration: Duration) -> Workflow
     public func observed(by observer: some AgentObserver) -> Workflow
 
@@ -275,21 +498,145 @@ public struct Workflow: Sendable {
 
 ### Durable namespace
 
-```swift
-public extension Workflow {
-    struct Durable: Sendable {
-        enum CheckpointPolicy: Sendable { case onCompletion, everyStep }
+Requires the **`Integrations`** SwiftPM trait (`traits: ["Integrations"]` or
+`--traits Integrations`) for real checkpoint/resume at **execute** time.
 
-        func checkpoint(id: String, policy: CheckpointPolicy = .onCompletion) -> Workflow
-        func checkpointing(_ checkpointing: WorkflowCheckpointing) -> Workflow
-        func fallback(primary: some AgentRuntime, to backup: some AgentRuntime, retries: Int = 0) -> Workflow
-        func execute(_ input: String, resumeFrom checkpointID: String? = nil) async throws -> AgentResult
-    }
+With checkpoint/resume configured (or `resumeFrom` set), lean builds warn at
+`WorkflowCheckpointing.inMemory()` / `.fileSystem(directory:)`,
+`.durable.configured(id:store:)`, and `.durable.checkpoint` / `.checkpointing`,
+then throw `WorkflowError.durableRuntimeUnavailable` with the rebuild remedy.
+`DurableWorkflow.execute` / `resume` always throw that error on lean builds
+because both identity and store are required. Without deprecated checkpoint
+configuration, bare `Workflow.Durable.execute` still runs as a non-durable
+workflow. Query `WorkflowCheckpointing.isAvailable` or
+`Workflow.Durable.isAvailable` before opting in.
+
+```swift
+public struct WorkflowCheckpointID: Hashable, Sendable, RawRepresentable, Codable {
+    public let rawValue: String
+    public init(rawValue: String)
+    public init(_ rawValue: String)
 }
 
+public struct DurableWorkflow: Sendable {
+    public func execute(_ input: String) async throws -> AgentResult
+    public func resume(_ input: String, from checkpointID: WorkflowCheckpointID) async throws -> AgentResult
+}
+
+public extension Workflow {
+    struct Durable: Sendable {
+        static var isAvailable: Bool { get }
+        enum CheckpointPolicy: Sendable { case onCompletion, everyStep }
+
+        func configured(
+            id: WorkflowCheckpointID,
+            store: WorkflowCheckpointing,
+            policy: CheckpointPolicy = .onCompletion
+        ) -> DurableWorkflow
+
+        @available(*, deprecated, message: "Use configured(id:store:policy:).")
+        func checkpoint(id: String, policy: CheckpointPolicy = .onCompletion) -> Workflow
+        @available(*, deprecated, message: "Use configured(id:store:policy:).")
+        func checkpointing(_ checkpointing: WorkflowCheckpointing) -> Workflow
+        @available(*, deprecated, message: "Use Workflow.fallback(primary:to:retries:).")
+        func fallback(primary: some AgentRuntime, to backup: some AgentRuntime, retries: Int = 0) -> Workflow
+        @available(*, deprecated, message: "Use DurableWorkflow.execute(_:) or resume(_:from:).")
+        func execute(_ input: String, resumeFrom checkpointID: String? = nil) async throws -> AgentResult
+    }
+
+    func fallback(
+        primary: some AgentRuntime,
+        to backup: some AgentRuntime,
+        retries: Int = 0
+    ) -> Workflow
+}
+
+// Configuration-only in lean builds; factories warn immediately.
+// Durable engine requires Integrations at execute.
+WorkflowCheckpointing.isAvailable
 WorkflowCheckpointing.inMemory()
-WorkflowCheckpointing.fileSystem(directory: URL)
+WorkflowCheckpointing.fileSystem(directory: URL, retention: WorkflowCheckpointRetention = .default)
+WorkflowCheckpointRetention.default // keep-latest 16 per run
 ```
+
+File-backed stores prune to keep-latest-N per run and load through a directory
+manifest. Resume identity is step kind + position + explicit `signature:` —
+not `fileID:line`. See [Durable Execution](/guide/durable-execution).
+
+## 7b) Job
+
+Shared notes box plus one fan-out of helpers. `Workflow` remains the
+last-answer chain.
+
+| Need | Use |
+| --- | --- |
+| Last agent's answer becomes the next agent's input | `Workflow` |
+| Shared notes, different briefs, N decided after a step | `Job` |
+
+```swift
+public struct JobRecord: Sendable, Equatable {
+    public let kind: String
+    public let text: String
+    public init(kind: String, text: String)
+}
+
+public protocol JobStore: Actor, Sendable {
+    func ingest(_ record: JobRecord) async
+    func records() async -> [JobRecord]
+    func records(kind: String) async -> [JobRecord]
+}
+
+public actor InMemoryJobStore: JobStore {
+    public init()
+}
+
+public struct JobChild: Sendable {
+    public let name: String
+    public let agent: any AgentRuntime
+    public let brief: String
+    public init(name: String, agent: some AgentRuntime, brief: String)
+}
+
+public struct JobChildResult: Sendable, Equatable {
+    public let name: String
+    public let result: AgentResult
+    public init(name: String, result: AgentResult)
+}
+
+public enum JobError: Error, Sendable, Equatable {
+    case emptyChildName
+    case duplicateChildName(String)
+    case emptyFanOut
+    case fanOutAlreadyUsed
+}
+
+public struct Job: Sendable {
+    public init(store: any JobStore = InMemoryJobStore())
+    public func run<Output: Sendable>(
+        _ input: String,
+        body: @Sendable (JobSession) async throws -> Output
+    ) async throws -> Output
+}
+
+public struct JobSession: Sendable {
+    public let input: String
+    public func ingest(_ record: JobRecord) async
+    public func window(query: String, tokenLimit: Int) async -> String
+    public func records(kind: String) async -> [JobRecord]
+    public func fanOut(_ children: [JobChild]) async throws -> [JobChildResult]
+}
+```
+
+`Job.run` is app-owned steps: you ingest notes, retrieve windows, then
+`fanOut` once per run. Helpers run concurrently; results come back sorted by
+trimmed name. Empty names, duplicate names, and an empty child list fail
+closed without consuming the fan-out. Helper output is not auto-ingested.
+v1 does not checkpoint.
+
+`JobStore` holds records in ingest order. `records(kind:)` is an exact kind
+match. `JobSession.window` always renders from `store.records()` with a
+case-insensitive substring of kind or text; the store does not implement
+`window`.
 
 ## 8) InputGuard and OutputGuard
 
@@ -308,6 +655,8 @@ public struct OutputGuard: OutputGuardrail, Sendable {
 }
 ```
 
+`GuardrailResult` is a closed enum: `.passed(...)` or `.tripwire(message:)` (a tripwire always has a message). Compatibility accessors `tripwireTriggered`, `message`, `outputInfo`, and `metadata` remain for observers. `GuardrailRunner` switches on the enum cases and `GuardrailError` tripwire cases carry a required `message: String`.
+
 ### Guardrail protocols (for advanced use)
 
 ```swift
@@ -320,22 +669,127 @@ public protocol OutputGuardrail: Sendable {
 }
 ```
 
+`AgentContext` orchestration slots (`originalInput`, `previousOutput`,
+`currentAgentName`, `executionPath`, `startTime`) are typed `ContextKey`
+statics. Prefer `set(.originalInput, "…")` / `get(.originalInput)` over the
+deprecated `AgentContextKey` get/set. Typed `ContextKey` writes stay in the
+slot store introduced with the unified context; `snapshot` still projects
+those names. The deprecated `AgentContextProviding` protocol remains
+functional for compatibility: conformers provide a `contextKey`, then use
+`setTyped(_:)`, `typed(_:)`, `removeTyped(_:)`, and `hasTyped(_:)`. These
+type-indexed methods use a separate legacy namespace and do not appear in
+string-keyed snapshots. Migrate new code to ``ContextKey`` (`ContextKey<Value>`) and the
+`setTyped(_:value:)` / `getTyped(_:)` accessors. The deprecated
+`AgentContextKey` overloads of `get(_:)` and `set(_:value:)` remain available
+for existing string-keyed callers until the 0.7.0 breaking boundary.
+
 ## 9) Memory factories
 
-Dot-syntax memory factories used with the `memory` init parameter.
+Dot-syntax memory factories are contextual. Use them where Swift can infer a
+specific memory type, such as the `memory:` init parameter, or assign to the
+concrete memory actor type. Do not call these as static members on the
+`Memory` protocol.
+
+### Package default (`Agent.makeDefaultMemory()`)
+
+When an agent is created without an explicit `memory:` argument, Swarm uses
+`Agent.makeDefaultMemory()`:
 
 ```swift
-Memory.conversation(maxMessages: 100)
-Memory.slidingWindow(maxTokens: 4000)
-Memory.summary(configuration: .default, summarizer: TruncatingSummarizer.shared)
-Memory.hybrid(configuration: .default, summarizer: TruncatingSummarizer.shared)
-Memory.persistent(backend: InMemoryBackend(), conversationId: UUID().uuidString, maxMessages: 0)
-Memory.vector(embeddingProvider: embedder, similarityThreshold: 0.7, maxResults: 10)
+// Trait-aware package default (prefer over constructing integration types yourself)
+public static func makeDefaultMemory() throws -> any Memory
+// Integrations on  → DefaultAgentMemory (ContextCore + Wax), all platforms
+// Integrations off → SlidingWindowMemory
+// Query DefaultAgentMemory.isSemanticMemoryAvailable when using the Integrations default.
+// Call SemanticEmbeddingAvailability.ensureModelAvailable() to download MiniLM.
+// downloadsEmbeddingModelAutomatically (default false) logs and continues on failure.
 ```
+
+Pass an explicit factory when you want a fixed backend regardless of traits:
+
+```swift
+let agent = try Agent(
+    "Remember recent context.",
+    memory: .conversation(maxMessages: 100)
+)
+
+let sliding: SlidingWindowMemory = .slidingWindow(maxTokens: 4000)
+let summary: SummaryMemory = .summary(configuration: .default, summarizer: TruncatingSummarizer.shared)
+let hybrid: HybridMemory = .hybrid(configuration: .default, summarizer: TruncatingSummarizer.shared)
+let persistent: PersistentMemory = .persistent(
+    backend: InMemoryBackend(),
+    conversationId: UUID().uuidString,
+    maxMessages: 0
+)
+let vector: VectorMemory = .vector(
+    embeddingProvider: embedder,
+    similarityThreshold: 0.7,
+    maxResults: 10
+)
+```
+
+### Optional memory capabilities (`Memory` protocol)
+
+Custom `Memory` conformers opt into optional runtime behaviors by implementing
+defaulted `Memory` requirements. Marker protocols are neither required for
+runtime dispatch nor consulted. Implementing the member is the opt-in:
+
+```swift
+public protocol Memory: Actor, Sendable {
+    // ...required members...
+
+    // Session lifecycle (defaults: no-op)
+    func beginMemorySession() async
+    func endMemorySession() async
+
+    // Item-aware retrieval (default: falls back to context(for:tokenLimit:))
+    func context(for query: MemoryQuery) async -> String
+
+    // Session-history replay (default: appends each message via add(_:))
+    func importSessionHistory(_ messages: [MemoryMessage]) async
+
+    // Seed gate (default: isEmpty — only fresh memories accept seeding)
+    func shouldImportSessionHistory() async -> Bool
+
+    // Composite session layer (default: nil)
+    nonisolated var trackedSessionMemory: (any Memory)? { get }
+
+    // Automatic seeding policy (default: true)
+    nonisolated var allowsAutomaticSessionSeeding: Bool { get }
+
+    // Prompt labels for retrieved context (default: nil)
+    nonisolated var memoryPromptMetadata: MemoryPromptMetadata? { get }
+}
+```
+
+`MemoryPromptMetadata(title:guidance:priority:)` labels memory context in
+system prompts; `nil` renders under the generic "Relevant Context from Memory"
+heading with no guidance text.
+
+Memory lifecycle, retrieval, seeding, and prompt metadata are direct
+requirements on `Memory`; implement them on the memory type itself.
+
+The former marker protocols remain public and deprecated so existing conformances
+continue to compile: `MemorySessionLifecycle`, `MemorySessionReplayAware`,
+`MemoryRetrievalPolicyAware`, `MemorySessionImportPolicy`, and
+`MemoryPromptDescriptor`. Their corresponding `Memory` requirements are
+`beginMemorySession()` / `endMemorySession()`, `importSessionHistory(_:)`,
+`context(for: MemoryQuery)`, `allowsAutomaticSessionSeeding`, and
+`memoryPromptMetadata`.
+
+`MemoryPromptDescriptor` is bridged to `Memory.memoryPromptMetadata`: its title,
+guidance, and priority are combined into `MemoryPromptMetadata`, preserving
+prompt labels for existing conformers without source changes. New conformers
+should implement the direct `Memory` requirements; the runtime does not probe
+the legacy marker protocols.
 
 ## 10) HandoffTool
 
 Agents passed via the `handoffs` or `handoffAgents` init parameters are automatically wrapped as tool calls. The LLM can invoke them to delegate control.
+
+Default names come from the target runtime type (`handoff_to_` + snake_case of `type(of:)`). `Agent` initialization, `withHandoffs`, `withTools`, and `Agent.Builder` handoff setters reject duplicate effective names (`AgentError.duplicateHandoffToolName`) and names that collide with a registered tool (`AgentError.handoffToolNameCollidesWithTool`), including disabled tools. After that check, the in-loop handoff map keeps the first entry if a name were ever repeated.
+
+`AnyHandoffConfiguration` and `HandoffConfiguration` store a ``HandoffHistory`` value (`none`, `nested`, or `summarized(maxTokens:)`) so history strategy survives type erasure. ``nestHandoffHistory`` remains available as a derived boolean for source compatibility.
 
 ```swift
 // Via V3 canonical init
@@ -343,53 +797,258 @@ let agent = try Agent("Route requests to the right specialist.") {
     // tools
 }
 
-// With handoff agents (convenience init)
+// Distinct overrides when targets share a runtime type
 let triage = try Agent(
-    instructions: "Route requests.",
-    handoffAgents: [billingAgent, supportAgent, salesAgent]
+    "Route requests.",
+    handoffs: [
+        billingAgent.asHandoff { $0.name("handoff_to_billing") },
+        supportAgent.asHandoff { $0.name("handoff_to_support") },
+        salesAgent.asHandoff { $0.name("handoff_to_sales") },
+    ]
 )
+
+// Typed options preserve summarized history after erasure
+let specialist = supportAgent.asHandoff {
+    $0.policy(.strict) // .summarized(maxTokens: 600) by default for strict
+}
 ```
+
+Use ``HandoffOptions/history(_:)`` or ``HandoffConfiguration``'s `history:` parameter instead of the deprecated `nestHandoffHistory:` boolean initializers.
+
+Coordinator and in-loop dispatch always call ``AgentRuntime/handleHandoff(_:context:session:observer:)``. The default implementation filters reserved request-context prefixes (`auth`, `user_id`, `authorization`, `session`, `internal.`), writes `handoff_source` and optional `handoff_reason`, records execution, and runs the target with the supplied session and observer. `HandoffHistory.nested` and `.summarized` pass a nested session; `.none` passes `nil`. Override `handleHandoff` on any `AgentRuntime` — `as? HandoffReceiver` is gone. `HandoffReceiver` remains as a deprecated empty refinement.
 
 ## 11) Inference providers
 
 ```swift
 public protocol InferenceProvider: Sendable {
-    func generate(prompt: String, options: InferenceOptions) async throws -> String
+    var capabilities: InferenceProviderCapabilities { get }
+    var promptTokenCounter: (any PromptTokenCounter)? { get }
+
+    func generate(messages: [InferenceMessage], options: InferenceOptions) async throws -> String
 
     func stream(
-        prompt: String,
+        messages: [InferenceMessage],
         options: InferenceOptions
     ) -> AsyncThrowingStream<String, Error>
 
     func generateWithToolCalls(
-        prompt: String,
+        messages: [InferenceMessage],
         tools: [ToolSchema],
         options: InferenceOptions
     ) async throws -> InferenceResponse
-}
-
-public protocol ConversationInferenceProvider: InferenceProvider {
-    func generate(
-        messages: [InferenceMessage],
-        options: InferenceOptions
-    ) async throws -> String
 
     func generateWithToolCalls(
         messages: [InferenceMessage],
         tools: [ToolSchema],
-        options: InferenceOptions
+        options: InferenceOptions,
+        toolExecutor: ToolCallExecutor?
     ) async throws -> InferenceResponse
+
+    func streamWithToolCalls(
+        messages: [InferenceMessage],
+        tools: [ToolSchema],
+        options: InferenceOptions
+    ) -> AsyncThrowingStream<InferenceStreamUpdate, Error>
+
+    func streamWithToolCalls(
+        messages: [InferenceMessage],
+        tools: [ToolSchema],
+        options: InferenceOptions,
+        toolExecutor: ToolCallExecutor?
+    ) -> AsyncThrowingStream<InferenceStreamUpdate, Error>
+
+    func generateStructured(
+        messages: [InferenceMessage],
+        request: StructuredOutputRequest,
+        options: InferenceOptions
+    ) async throws -> StructuredOutputResult
+
+    // Prompt-string methods remain for one minor so existing backends compile.
+    // Agent and tests call the messages methods only.
+    // Prompt-string methods default to wrapping `prompt` as a user message.
 }
 ```
 
-### Provider factories (dot-syntax)
+### InferenceMessage
 
 ```swift
-.anthropic(key: "sk-...")
-.openAI(key: "sk-...")
-.ollama(model: "llama3")
-.foundationModels()     // On-device, iOS 26 / macOS 26 when FoundationModels is available
+public struct InferenceMessage: Sendable, Equatable {
+    public enum Role: String, Sendable, Codable {
+        case system
+        case user
+        case assistant
+        case tool
+    }
+
+    public enum Body: Sendable, Equatable {
+        case system(String)
+        case user(String)
+        case assistant(String, toolCalls: [ToolCall] = [])
+        case tool(name: String, content: String, toolCallID: String?)
+    }
+
+    /// Provider-native tool call on an assistant body. Not the host `ToolCall`
+    /// (`id: UUID`, `toolName`) used by `AgentEvent.Tool` and `ToolInvocation`.
+    public struct ToolCall: Sendable, Equatable {
+        public let id: String?
+        public let name: String
+        public let arguments: [String: SendableValue]
+        public let thoughtSignature: String?
+    }
+
+    public let body: Body
+    public var role: Role { get }
+    public var content: String { get }
+    public var name: String? { get }
+    public var toolCallID: String? { get }
+    public var toolCalls: [ToolCall] { get }
+
+    public init(body: Body)
+
+    @available(*, deprecated, message: "Use init(body:) or the role factories.")
+    public init(
+        role: Role,
+        content: String,
+        name: String? = nil,
+        toolCallID: String? = nil,
+        toolCalls: [ToolCall] = []
+    )
+
+    public static func system(_ content: String) -> InferenceMessage
+    public static func user(_ content: String) -> InferenceMessage
+    public static func assistant(_ content: String, toolCalls: [ToolCall] = []) -> InferenceMessage
+    public static func tool(name: String, content: String, toolCallID: String? = nil) -> InferenceMessage
+}
 ```
+
+Prefer `InferenceMessage(body:)` or the role factories (`system`, `user`, `assistant`, `tool`). The payload is a closed `Body`: a user or system message cannot store tool calls, and a tool result always has a name. Historical `role`, `content`, `name`, `toolCallID`, and `toolCalls` remain as computed projections of `body`. Assistant `toolCalls` are `InferenceMessage.ToolCall` values, not host `ToolCall` records.
+
+The deprecated memberwise `init(role:content:name:toolCallID:toolCalls:)` maps `.system` → `.system(content)`, `.user` → `.user(content)`, `.assistant` → `.assistant(content, toolCalls:)`, and `.tool` → `.tool(name: name ?? "tool", content: content, toolCallID:)`. Extra fields for that role are dropped.
+
+Agent reads ``InferenceProviderCapabilities`` and ``InferenceProvider/promptTokenCounter``
+directly from ``InferenceProvider``. Deprecated marker protocols remain available
+for source compatibility, but capability bits and the structured-message methods
+are the single provider integration seam. Agent does not dispatch through marker
+protocol identities.
+
+Use ``InferenceProviderCapabilities/resolved(for:)`` for canonical capability
+resolution. The deprecated ``InferenceProviderCapabilities/inferred(from:)``
+helper remains available as a forwarding compatibility shim until a future
+breaking boundary is explicitly documented; it has the same capability
+semantics as ``resolved(for:)``.
+
+### Provider factories (dot-syntax)
+
+Built-in inference is Apple Foundation Models (on-device) and
+``OpenAICompatibleProvider`` (remote / local HTTP). Other backends implement
+``InferenceProvider`` and are passed explicitly (or via
+`await Swarm.configure(provider:)`).
+
+Prompt-string methods remain for one minor so existing backends compile. Agent
+and tests call the messages methods only. Prompt-string methods default to
+wrapping `prompt` as a user message. Capability bits and the structured-message
+methods are the live dispatch surface. Deprecated marker protocols remain
+available for source compatibility: `PromptTokenCountingInferenceProvider`,
+`StructuredOutputInferenceProvider`, and `ToolCallStreamingInferenceProvider`.
+
+```swift
+.foundationModels()                 // On-device first-class provider
+.foundationModels(model: .default)  // Apple SystemLanguageModel (not Swarm Profile)
+.foundationModels(profile: profile) // Swarm DynamicProfile re-resolved each turn
+.foundationModels(model: pcc)       // OS 27 Apple LanguageModel / PCC
+.privateCloudCompute()              // OS 27 PCC convenience (quota-aware IfAvailable variant)
+.openAICompatible(.ollama(model: "llama3.2"))
+.openAICompatible(.openAI(apiKey: "sk-...", model: "gpt-4o"))
+.textOnly(stringBackend)            // TextOnlyBackend → flatten adapter
+// Custom: pass any InferenceProvider value
+```
+
+| Factory family | Return type | Notes |
+|----------------|-------------|-------|
+| `.foundationModels()` | `FoundationModelsInferenceProvider` | Built-in on-device path; Agent-owned tool loop (capture). Optional `model:` is Apple `SystemLanguageModel`. |
+| `.foundationModelsOwningToolLoop()` | `FoundationModelsInferenceProvider` | Same type; advertises a provider-owned tool loop |
+| `.foundationModels(profile:)` | `FoundationModelsInferenceProvider` | Capture adapter driven by Swarm ``DynamicProfile`` (not Apple's OS 27 `LanguageModelSession.DynamicProfile`) |
+| `.foundationModels(model:)` | `FoundationModelsInferenceProvider` | OS 27+ Apple `LanguageModel`, including `PrivateCloudComputeLanguageModel`. `ifAvailable(model:)` does not fall back to on-device. |
+| `.privateCloudCompute()` | `FoundationModelsInferenceProvider` | OS 27+ PCC convenience. `.privateCloudComputeIfAvailable()` returns nil when PCC is unavailable or its daily quota is exhausted; neither falls back to on-device. PCC-backed providers do not advertise `.privateInference`. |
+| `.openAICompatible(_:)` | `OpenAICompatibleProvider` | OpenAI / Azure / OpenRouter / Ollama / LM Studio over Chat Completions; Linux-first |
+| `.textOnly(_:)` | `TextOnlyConversationInferenceProviderAdapter` | Wraps a ``TextOnlyBackend``; only flatten site |
+| Custom `InferenceProvider` | your type | Implement the protocol for other backends |
+
+Opt in to a provider-owned tool loop with
+``InferenceProvider/foundationModelsOwningToolLoop()``. Agent reads
+``InferenceProviderCapabilities/providerOwnedToolLoop`` and always calls
+``InferenceProvider/generateWithToolCalls(messages:tools:options:toolExecutor:)``
+(or the streaming counterpart). It never type-casts the adapter.
+``AgentConfiguration/foundationModelsExecution`` is ignored. Choose the loop
+by constructing ``InferenceProvider/foundationModelsOwningToolLoop()``.
+Capture remains the default. Structured outputs use guided generation when
+the JSON Schema maps; otherwise prompt+parse.
+OS 27 owned-loop can set ``FoundationModelsProviderConfiguration/reasoningLevel``
+(Swarm ``FoundationModelsReasoningLevel``, not Apple `ContextOptions`).
+``ToolChoice/specific(toolName:)`` has no Apple `ToolCallingMode` case and
+stays a prompt sentence.
+Owned-loop applies Swarm ``ProfileHistoryPolicy`` before seeding a text-only
+Apple `Transcript`. It does not rename Swarm ``DynamicProfile`` to Apple's
+`LanguageModelSession.DynamicProfile`. It does build the Apple session from
+a native `LanguageModelSession(profile:history:)` on OS 27, so the resolved
+instructions, tools, and knobs flow through one Apple session.
+Capture rehydrates a `Transcript` from user/assistant/tool messages when it
+can; flattening is the fallback for assistant tool-call metadata or extra
+system text.
+On OS 27, ``InferenceMessage`` image ``InferenceMessage/Attachment`` sidecars
+ride `Transcript` attachment segments (history) and multimodal `Prompt`
+attachments (pending turn). The provider advertises
+``InferenceProviderCapabilities/multimodalImages`` only on OS 27.
+See the [Foundation Models guide](/guide/foundation-models).
+
+You can register a user-authored `FoundationModels.Tool` in `@ToolBuilder`
+(wrapped as ``FoundationModelsNativeTool``).
+
+### Failover composition
+
+``FailoverProvider`` wraps an ordered `primary` + `fallbacks` chain behind
+the ``InferenceProvider`` protocol. Capabilities come from `primary`;
+prompt, streaming, and prompt-structured calls inherit failover through
+the protocol defaults.
+
+```swift
+let provider = FailoverProvider(
+    primary: .openAICompatible(.openAI(apiKey: key, model: "gpt-4o")),
+    fallbacks: [.openAICompatible(.ollama(model: "llama3.2"))],
+    onFailover: { index, error in print("provider \(index) failed: \(error)") }
+)
+let agent = try Agent("Be concise.", inferenceProvider: provider)
+```
+
+## 11b) Secret storage
+
+``SecretReference`` points at an API key held in a ``SecretStore`` so
+persisted configuration never embeds the raw key. ``KeychainSecretStore``
+(Apple platforms), ``EnvironmentSecretStore`` (Linux, CI), and
+``InMemorySecretStore`` (tests) implement the protocol. The inline key wins
+when non-empty; otherwise the reference resolves at request time:
+
+```swift
+let reference = SecretReference(service: "com.example.app", account: "openai-api-key")
+let configuration = OpenAICompatibleProviderConfiguration(
+    baseURL: URL(string: "https://api.openai.com/v1")!,
+    apiKeyReference: reference,
+    model: "gpt-4o"
+)
+let provider: OpenAICompatibleProvider = .openAICompatible(configuration, secretStore: store)
+```
+
+The same `apiKeyReference` + store shape wires into
+``WebSearchTool/Configuration`` (via
+`WebSearchTool(configuration:secretStore:)`) and ``HTTPMCPServer`` (via
+`init(url:name:apiKeyReference:secretStore:)`). Configuration debug
+descriptions render keys as `[redacted]`; ``SecretRedaction`` scrubs custom
+payloads. File-system checkpoints, ContextCore checkpoints, Wax memory
+stores, and the web memory plane are written owner-only (`0600` files;
+store-created directories are `0700`, pre-existing directories keep their
+permissions); migrate a pre-existing checkpoint directory with
+``WorkflowCheckpointing/hardenFilePermissions(in:)``. See the
+[Secret Storage guide](/guide/secret-storage).
 
 ## 12) Events and results
 
@@ -416,6 +1075,8 @@ public enum AgentEvent: Sendable {
         case partial(update: PartialToolCallUpdate)
         case completed(call: ToolCall, result: ToolResult)
         case failed(call: ToolCall, error: AgentError)
+
+        public static func completed(_ invocation: ToolInvocation) -> Self
     }
 
     public enum Output: Sendable {
@@ -424,32 +1085,394 @@ public enum AgentEvent: Sendable {
         case thinking(thought: String)
         case thinkingPartial(String)
     }
+
+    public enum Handoff: Sendable {
+        case requested(from: String, to: String, reason: String?)
+        case completed(from: String, to: String)
+        case started(from: String, to: String, input: String)
+        case completedWithResult(from: String, to: String, result: AgentResult)
+        case skipped(from: String, to: String, reason: String)
+    }
+
+    public enum Observation: Sendable {
+        case decision(String, options: [String]?)
+        case planUpdated(String, stepCount: Int)
+        case guardrailStarted(name: String, type: GuardrailType)
+        case guardrailPassed(name: String, type: GuardrailType)
+        case guardrailTriggered(name: String, type: GuardrailType, message: String?)
+        case memoryAccessed(operation: MemoryOperation, count: Int)
+        case llmStarted(model: String?, promptTokens: Int?)
+        case llmCompleted(model: String?, promptTokens: Int?, completionTokens: Int?, duration: TimeInterval)
+        case inferenceRetry(attempt: Int, message: String)
+    }
+}
+
+public struct ToolInvocation: Sendable, Equatable {
+    public let call: ToolCall
+    public let result: ToolResult
+}
+
+public protocol AgentObserver: Sendable {
+    func onToolEnd(context: AgentContext?, agent: any AgentRuntime, result: ToolResult) async
+    func onToolEnd(context: AgentContext?, agent: any AgentRuntime, invocation: ToolInvocation) async
+    // ... other requirements ...
 }
 
 public struct AgentResult: Sendable {
     public let output: String
-    public let toolCalls: [ToolCall]
-    public let toolResults: [ToolResult]
+    public let invocations: [ToolInvocation]
+    public var toolCalls: [ToolCall] { get }
+    public var toolResults: [ToolResult] { get }
     public let iterationCount: Int
     public let duration: Duration
+    /// Provider-reported token usage, or `nil` when the backend does not expose counts
+    /// (including Apple Foundation Models on the current SDK).
     public let tokenUsage: TokenUsage?
+    public let metadata: [String: SendableValue]
+}
+
+public struct AgentResponse: Sendable {
+    public let responseId: String
+    public let output: String
+    public let agentName: String
+    public let timestamp: Date
+    public let metadata: [String: SendableValue]
+    public let toolCalls: [ToolCallRecord]
+    public let usage: TokenUsage?
+    public let iterationCount: Int
+    /// Lossy compatibility projection onto `AgentResult`.
+    /// Drops `responseId`, `agentName`, and response `timestamp`.
+    /// Reuses each `ToolCallRecord.callId` for stable tool identity.
+    /// `duration` is the sum of recorded tool-call durations (`.zero` when no tools ran).
+    public var asResult: AgentResult { get }
+}
+
+public struct ToolResult: Sendable {
+    public enum Outcome: Sendable {
+        case success(SendableValue)
+        case failure(message: String)
+    }
+
+    public let callId: UUID
+    public let duration: Duration
+    public let outcome: Outcome
+    public var isSuccess: Bool { get }
+    public var output: SendableValue { get }       // `.null` on failure
+    public var errorMessage: String? { get }      // `nil` on success
+
+    @available(*, deprecated, message: "Use ToolResult.success(...) or .failure(callId:error:duration:)")
+    public init(
+        callId: UUID,
+        isSuccess: Bool,
+        output: SendableValue,
+        duration: Duration,
+        errorMessage: String? = nil
+    )
+}
+
+public struct ToolCallRecord: Sendable {
+    public enum Outcome: Sendable {
+        case success(SendableValue)
+        case failure(message: String)
+    }
+
+    public let callId: UUID
+    public let toolName: String
+    public let arguments: [String: SendableValue]
+    public let duration: Duration
+    public let timestamp: Date
+    public let outcome: Outcome
+    public var result: SendableValue { get }      // `.null` on failure
+    public var isSuccess: Bool { get }
+    public var errorMessage: String? { get }      // `nil` on success
 }
 ```
+
+Prefer `ToolResult.success` / `.failure` and `ToolCallRecord.success` / `.failure`. The deprecated `ToolResult.init(callId:isSuccess:output:duration:errorMessage:)` and `ToolCallRecord` compatibility initializer remain available until the documented breaking boundary. They map independently supplied fields to the closed outcome using the historical rules: success ignores `errorMessage`, failure ignores `output`, and a nil failure message becomes `"Tool execution failed"`. Codable still decodes the historical boolean + optional JSON shape and encodes those same keys from the closed outcome.
+
+`AgentEvent.Tool.completed(_ invocation:)` yields `.completed(call:result:)` from a paired `ToolInvocation`. The enum associated values stay `call` and `result`.
+
+Production writers call `onToolEnd(context:agent:invocation:)` so observers can name the tool without a side store. The protocol-extension default forwards `invocation.result` to the result-only `onToolEnd(context:agent:result:)` so existing conformers keep compiling.
+
+### Tool failure errors
+
+Tool failures surface as `AgentError.toolFailure(toolName:message:cause:)`, which keeps the
+original error instance reachable through `cause` (`nil` for failures synthesized from
+strings alone, such as trait-gate or configuration errors):
+
+```swift
+public case toolFailure(toolName: String, message: String?, cause: (any Error)?)
+```
+
+The previous `AgentError.toolExecutionFailed(toolName:underlyingError:)` case is deprecated
+but remains fully constructible and matchable; `message` carries the same flattened string
+that `underlyingError` used to.
+
+Handoff identity failures are thrown from `Agent` initialization, not from the tool loop:
+
+```swift
+public case duplicateHandoffToolName(name: String)
+public case handoffToolNameCollidesWithTool(name: String)
+```
+
+Both cases are `Equatable`, surface the colliding name in `errorDescription`, and are not retryable.
+
+Typed structured-output decode failures keep the original error through
+`underlying`, compared in `==` like `toolFailure` `cause`:
+
+```swift
+public case structuredOutputDecodingFailed(reason: String, underlying: (any Error)?)
+```
+
+## 12b) Voice
+
+`VoiceSession` is a turn-based actor around `any AgentRuntime`. VoiceSession
+sends text to `Agent.stream`; audio attachments are opt-in and
+capability-gated. Inject `SpeechToText` and `TextToSpeech`. Barge-in is opt-in
+via `bargeInEnabled`.
+
+```swift
+public protocol SpeechToText: Sendable {
+    func start() -> AsyncThrowingStream<SpeechTranscript, Error>
+    func stop() async
+}
+
+public protocol TextToSpeech: Sendable {
+    func speak(_ text: String) async throws
+    func stop() async
+}
+
+public protocol VoiceActivityDetector: Sendable {
+    func start() -> AsyncThrowingStream<VoiceActivityEvent, Error>
+    func stop() async
+}
+
+public actor VoiceSession {
+    public init(
+        agent: any AgentRuntime,
+        speechToText: any SpeechToText,
+        textToSpeech: any TextToSpeech,
+        session: (any Session)? = nil,
+        voiceActivityDetector: (any VoiceActivityDetector)? = nil,
+        configuration: VoiceSessionConfiguration = .default
+    )
+    public var events: AsyncStream<VoiceEvent> { get }
+    public func listenAndRespond() async throws -> VoiceTurnResult
+    public func respond(
+        to transcript: String,
+        attachments: [InferenceMessage.Attachment] = []
+    ) async throws -> VoiceTurnResult
+    public func stop() async
+}
+
+public struct VoiceTurnRuntime: AgentRuntime {
+    public init(voice: VoiceSession, presenting presented: any AgentRuntime)
+}
+
+#if canImport(Speech)
+@available(macOS 26.0, iOS 26.0, visionOS 26.0, *)
+extension VoiceSession {
+    public static func appleOnDevice(
+        agent: any AgentRuntime,
+        session: (any Session)?,
+        locale: Locale,
+        configuration: VoiceSessionConfiguration,
+        installAssetsIfNeeded: Bool
+    ) async throws -> VoiceSession
+}
+#endif
+```
+
+`AppleSpeechToText` (`SpeechAnalyzer` + `SpeechTranscriber`) and
+`AppleTextToSpeech` (`AVSpeechSynthesizer`) are Apple-only. They are not
+available on Linux.
+
+See the [Voice guide](/guide/voice).
 
 ## 13) Public macros
 
 | Macro | Applied To | Effect |
 |-------|-----------|--------|
-| `@Tool("description")` | `struct` | Synthesizes `AnyJSONTool` conformance + JSON schema from `@Parameter` properties |
+| `@Tool("description")` | `struct` | Synthesizes `Tool` and `Sendable` conformance, typed `Input`/`Output`, argument decoding, and JSON schema from `@Parameter` properties |
 | `@Parameter("description")` | `var` inside `@Tool` struct | Marks property as a schema parameter with description |
 | `@Traceable` | `struct` conforming to `AnyJSONTool` | Injects tracing around `execute()` |
 | `#Prompt(...)` | call site | Type-safe interpolated prompt string |
+| `#Tool("name", "description")` | call site | Creates an inline `Tool` from a closure with labeled parameters |
+| `@Builder` | `struct` | Generates fluent setters for stored `var` properties |
 
-## 14) Naming guarantees
+Inline tool example:
+
+```swift
+let greet = #Tool("greet", "Greets a person") { (name: String) in
+    "Hello, \(name)!"
+}
+```
+
+## 14) Companion products
+
+The package exports four public library products:
+
+| Product | Source surface | Public entry points |
+|---------|----------------|---------------------|
+| `Swarm` | `Sources/Swarm` | Agents, tools, workflows, memory, guardrails, providers, MCP client/bridge, workspace, resilience, observability, macros, voice coordinator |
+| `SwarmOpenTelemetry` | `Sources/SwarmOpenTelemetry` | Requires `traits: ["OpenTelemetry"]`. `OpenTelemetryInferenceProvider`, `InferenceProvider.instrumentedWithOpenTelemetry(...)`, `AgentRuntime.instrumentedWithOpenTelemetry(...)`, `OTLPHTTPTraceExporter`, `OpenTelemetryTracing`, `OpenTelemetryTracePropagation`, and `SwarmRuntimeTracer` |
+| `SwarmMembrane` | `Sources/SwarmMembrane` | **Deprecated.** Hollow re-export (`@_exported import Swarm`). Import `Swarm` and use `MembraneEnvironment`, `MembraneFeatureConfiguration`, `MembraneAgentAdapter`, and `DefaultMembraneAgentAdapter` under `Sources/Swarm/Integration/Membrane/`. The product will be removed in 0.7.0. |
+| `SwarmMCP` | `Sources/SwarmMCP` | Requires `traits: ["MCP"]`. `SwarmMCPServerService`, `SwarmMCPToolCatalog`, `SwarmMCPToolExecutor`, `SwarmMCPToolExecutionError`, and `SwarmMCPToolRegistryAdapter`. Swarm's MCP *client* stays in the `Swarm` product and does not need this trait. |
+
+### OpenTelemetry wrappers
+
+Requires the **OpenTelemetry** SwiftPM trait (`traits: ["OpenTelemetry"]`).
+Selecting the `SwarmOpenTelemetry` product in Xcode without the trait leaves
+the module hollow.
+
+```swift
+import Swarm
+import SwarmOpenTelemetry
+
+OpenTelemetryTracing.configureOTLPHTTPExport()
+
+let tracedAgent = try Agent(
+    "Answer briefly.",
+    inferenceProvider: .foundationModels()
+).instrumentedWithOpenTelemetry()
+
+let tracedProvider = myCustomProvider.instrumentedWithOpenTelemetry()
+
+var request = URLRequest(url: endpoint)
+TraceContextHeaders.applyCurrent(to: &request)
+```
+
+`OTLPHTTPTraceExporter` posts OTLP/HTTP JSON to
+`http://localhost:4318/v1/traces` by default (no gRPC). Built-in Web tool
+requests inject W3C `traceparent` from the current span. See
+[OpenTelemetry Tracing](../guide/opentelemetry-tracing.md).
+
+`AgentConfiguration.autoAttachMetricsCollector(true)` attaches a
+`MetricsCollector` without passing a tracer; read
+`agent.metricsCollector?.snapshot()`. Default is off.
+
+### MCP server adapter
+
+The core `Swarm` product includes MCP client-side primitives. The client
+connection protocol is `MCPServerConnection` (`MCPServer` remains as a
+deprecated typealias). Built-in transports are streamable HTTP and stdio:
+
+```swift
+let http = try HTTPMCPServer(
+    url: URL(string: "https://mcp.example.com/api")!,
+    name: "example-server",
+    apiKey: "sk-..."
+)
+let stdio = try StdioMCPServer(
+    command: "/opt/homebrew/bin/npx",
+    arguments: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+    name: "filesystem"
+)
+
+let client = MCPClient()
+try await client.addServer(http)
+try await client.addServer(stdio)
+let tools = try await client.getAllTools()
+
+let bridge = MCPToolBridge(server: http)
+let bridgedTools = try await bridge.bridgeTools()
+```
+
+`HTTPMCPServer` speaks streamable HTTP (JSON or SSE responses, session id,
+`MCP-Protocol-Version`) and negotiates `2024-11-05` through `2025-11-25`.
+`StdioMCPServer` launches a child process and uses newline-delimited JSON-RPC.
+The launch is sandboxed: `command` must be an absolute path (`PATH` lookup is
+disabled), the child inherits only a minimal environment allowlist (plus an
+explicit `environment` overlay and `inheritedEnvironmentKeys`), and
+`workingDirectory` must be an absolute file URL (existence as a directory
+is enforced when `initialize()` launches the child), and must stay inside
+`allowedWorkingDirectoryRoot` when that sandbox root is set.
+`callTool` unwraps MCP content blocks; `callToolRaw` returns the envelope.
+Swarm does not implement prompts or sampling — those capability flags stay
+`false` on connections. `MCPClient` aggregates multiple connections and
+`MCPToolBridge` exposes remote MCP tools as Swarm JSON tools.
+
+`SwarmMCPServerService` requires the **MCP** SwiftPM trait
+(`traits: ["MCP"]`) and exposes a `SwarmMCPToolCatalog` and
+`SwarmMCPToolExecutor` over the MCP Swift SDK transport. For a Swarm
+`ToolRegistry`, use `SwarmMCPToolRegistryAdapter` as both catalog and executor:
+
+```swift
+import Swarm
+import SwarmMCP
+
+let registry = try ToolRegistry(tools: [WeatherTool()])
+let adapter = SwarmMCPToolRegistryAdapter(registry: registry)
+let service = SwarmMCPServerService(
+    toolCatalog: adapter,
+    toolExecutor: adapter
+)
+
+try await service.startStdio()
+await service.waitUntilCompleted()
+```
+
+`SwarmMCPServerService` instances are single-use; create a fresh service to
+restart after `stop()`.
+
+## 15) Naming guarantees
 
 - Observer APIs use the `observer` label.
 - Handoff callback naming is `onTransfer` / `transform` / `when`.
 - Every public type conforms to `Sendable`.
 - Agent is a struct (value type). Execution state lives in `run()`.
-- `Workflow` is the single coordination primitive.
+- `Workflow` is the last-answer chain. `Job` is the shared-notes job with per-helper briefs.
 - No legacy types: `AgentBuilder`, `AnyAgent`, `AnyTool`, `ClosureInputGuardrail`, `ClosureOutputGuardrail`, `AgentBlueprint`, `AgentLoop`.
+
+## 16) Deprecation sunset schedule
+
+Deprecated API keeps working until its removal boundary; nothing below is
+silently broken. Migrate at your pace, starting with the 0.7.0 group.
+
+| Deprecated API | Use instead | Removal |
+|---|---|---|
+| `Agent.Builder` compatibility shim | `Agent` initializers or `withTools(_:)` | 0.7.0 |
+| `SwarmMembrane` product | `import Swarm` | 0.7.0 |
+| `AgentContextProviding` protocol | `ContextKey<Value>` with `setTyped(_:value:)` / `getTyped(_:)` | 0.7.0 |
+| `AgentContext` `AgentContextProviding` overloads (`setTyped(_:)`, `typed(_:)`, `removeTyped(_:)`, `hasTyped(_:)`) | `ContextKey<Value>` overloads | 0.7.0 |
+| `RunHooks.onLLMStart` `[MemoryMessage]` overload | `[InferenceMessage]` overload | 0.7 |
+| No-backend `persistent()` factory overload | Explicit backend (`SwiftDataBackend.persistent()` on Apple, or `InMemoryBackend()`) | 0.7.0 |
+| `AgentContextKey` get/set | Typed `ContextKey` accessors such as `get(.originalInput)` | Later minor |
+| `HandoffReceiver` | Override `handleHandoff` on any `AgentRuntime` | Later minor |
+| `nestHandoffHistory:` boolean initializers | `history: HandoffHistory` | Later minor |
+| `ToolResult.init(callId:isSuccess:output:duration:errorMessage:)` | `ToolResult.success` / `.failure` | Documented breaking boundary (§12) |
+| `ToolCallRecord` compatibility initializer | `ToolCallRecord.success` / `.failure` | Documented breaking boundary (§12) |
+| `AgentError.toolExecutionFailed` | `toolFailure(toolName:message:cause:)` | Later minor |
+| `GuardrailResult` compatibility initializer | `passed` / `tripwire` | Later minor |
+| `AgentResponse` compatibility initializer | `ToolCallRecord.success` / `.failure` | Later minor |
+| `InferenceMessage` memberwise `init(role:content:name:toolCallID:toolCalls:)` | `init(body:)` or the role factories | Later minor |
+| `PromptTokenCountingInferenceProvider` | `promptTokenCounter` on `InferenceProvider` | Later minor |
+| `StructuredOutputInferenceProvider` | `InferenceProviderCapabilities.structuredOutputs` + `generateStructured` | Later minor |
+| `ToolCallStreamingInferenceProvider` | `streamingToolCalls` + `streamWithToolCalls` | Later minor |
+| `ConversationInferenceProvider` and its `Streaming` / `ToolCallStreaming` / `StructuredOutput` refinements | `InferenceProvider` | Later minor |
+| `CapabilityReportingInferenceProvider` | Capabilities declared on `InferenceProvider` | Later minor |
+| `InferenceProviderCapabilities.inferred(from:)` | `resolved(for:)` | Later minor |
+| `FoundationModelsExecutionMode` / `foundationModelsExecution` (ignored flag) | Provider-owned tool-loop adapters | Later minor |
+| `MemorySessionLifecycle` | `beginMemorySession()` / `endMemorySession()` on `Memory` | Later minor |
+| `MemorySessionReplayAware` | `importSessionHistory(_:)` on `Memory` | Later minor |
+| `MemoryRetrievalPolicyAware` | `context(for: MemoryQuery)` on `Memory` | Later minor |
+| `MemorySessionImportPolicy` | `allowsAutomaticSessionSeeding` on `Memory` | Later minor |
+| `MemoryPromptDescriptor` (and the `memoryPromptTitle` / `memoryPromptGuidance` / `memoryPriority` members) | `memoryPromptMetadata` on `Memory` | Later minor |
+| `WaxIntegration` | `IntegrationsTrait.isEnabled`, `WaxMemory`, or `WaxEmbeddingProviderAdapter` | Later minor |
+| `MCPServer` | `MCPServerConnection` | Later minor |
+| `Retry` | `RetryPolicy` | Later minor |
+| `Fallback` | `FallbackChain` | Later minor |
+| `Workflow` `checkpoint(id:)` / `checkpointing(_:)` builders | `configured(id:store:policy:)` | Later minor |
+| `Workflow` legacy `fallback(...)` builder | `Workflow.fallback(primary:to:retries:)` | Later minor |
+| `Workflow.run(_:resumeFrom:)` | `execute(_:resumeFrom:)` | Later minor |
+| Legacy `Workflow.execute(_:resumeFrom:)` | `DurableWorkflow.execute(_:)` or `resume(_:from:)` | Later minor |
+| `Workflow.first` | `firstCompleted` | Later minor |
+
+## 16b) Public-log redaction
+
+Public trace logs (`ConsoleTracer`, `SwiftLogTracer`) redact trace-event
+metadata whose key names credentials: API keys, bearer tokens, authorization
+headers, session identifiers, and cookies, plus the existing
+content-bearing keys. Unrelated counters such as `total_tokens` stay visible.
+`WebSearchTool.Configuration` descriptions likewise report only whether a key
+is configured, never the key value.

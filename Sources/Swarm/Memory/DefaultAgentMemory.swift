@@ -1,16 +1,19 @@
+#if SWARM_INTEGRATIONS && canImport(ContextCore)
 // DefaultAgentMemory.swift
 // Swarm Framework
 //
 // Default agent memory stack combining ContextCore working context with
-// Wax durable recall.
+// Wax durable recall. ContextCore links on all platforms with Integrations:
+// portable CPU/hash backends on Linux, Metal/CoreML acceleration on Apple.
 
+import ContextCore
 import Foundation
 
 /// Default Swarm memory stack.
 ///
 /// ContextCore remains the primary working-memory layer for multi-turn coding
 /// context. Wax is used as the durable long-term layer for persisted recall.
-public actor DefaultAgentMemory: Memory, MemoryPromptDescriptor, MemorySessionLifecycle, MemorySessionImportPolicy, MemorySessionReplayAware, MemoryRetrievalPolicyAware {
+public actor DefaultAgentMemory: Memory {
     public struct Configuration: Sendable {
         public static var `default`: Self {
             Configuration()
@@ -19,6 +22,15 @@ public actor DefaultAgentMemory: Memory, MemoryPromptDescriptor, MemorySessionLi
         public var contextCoreConfiguration: ContextCoreMemoryConfiguration
         public var waxStoreURL: URL
         public var waxConfiguration: WaxMemory.Configuration
+        /// Forwards ``ContextCoreMemoryConfiguration/downloadsEmbeddingModelAutomatically``.
+        ///
+        /// Default `false`. When `true`, the first ContextCore session start
+        /// downloads the MiniLM model via
+        /// ``SemanticEmbeddingAvailability/ensureModelAvailable(configuration:progressHandler:)``.
+        public var downloadsEmbeddingModelAutomatically: Bool {
+            get { contextCoreConfiguration.downloadsEmbeddingModelAutomatically }
+            set { contextCoreConfiguration.downloadsEmbeddingModelAutomatically = newValue }
+        }
 
         public init(
             contextCoreConfiguration: ContextCoreMemoryConfiguration = .default,
@@ -26,8 +38,13 @@ public actor DefaultAgentMemory: Memory, MemoryPromptDescriptor, MemorySessionLi
             waxConfiguration: WaxMemory.Configuration = WaxMemory.Configuration(
                 promptTitle: "Wax Memory Context (secondary)",
                 promptGuidance: "Use Wax memory as durable long-term context. Prefer current-session context first."
-            )
+            ),
+            downloadsEmbeddingModelAutomatically: Bool? = nil
         ) {
+            var contextCoreConfiguration = contextCoreConfiguration
+            if let downloadsEmbeddingModelAutomatically {
+                contextCoreConfiguration.downloadsEmbeddingModelAutomatically = downloadsEmbeddingModelAutomatically
+            }
             self.contextCoreConfiguration = contextCoreConfiguration
             self.waxStoreURL = waxStoreURL
             self.waxConfiguration = waxConfiguration
@@ -38,6 +55,34 @@ public actor DefaultAgentMemory: Memory, MemoryPromptDescriptor, MemorySessionLi
     public nonisolated let memoryPromptGuidance: String?
     public nonisolated let memoryPriority: MemoryPriorityHint = .primary
     public nonisolated let allowsAutomaticSessionSeeding = true
+
+    public nonisolated var memoryPromptMetadata: MemoryPromptMetadata? {
+        MemoryPromptMetadata(
+            title: memoryPromptTitle,
+            guidance: memoryPromptGuidance,
+            priority: memoryPriority
+        )
+    }
+
+    /// Whether this memory stack can produce real semantic embeddings.
+    ///
+    /// Returns `false` when ContextCore's default CoreML MiniLM model is missing
+    /// or failed to load, or when the default is a hash pseudo-vector provider
+    /// (platforms without CoreML). Rankings then use hash-seeded pseudo-vectors
+    /// and semantic recall quality is degraded. Call
+    /// ``SemanticEmbeddingAvailability/ensureModelAvailable(configuration:progressHandler:)``
+    /// to download the model; this property flips in-process after a successful
+    /// delivery. Custom embedding providers injected through
+    /// ``ContextCoreMemoryConfiguration`` are treated as available.
+    public nonisolated var isSemanticMemoryAvailable: Bool {
+        if usesDegradedHashEmbedder {
+            return false
+        }
+        if tracksDefaultCoreMLEmbedder {
+            return SemanticEmbeddingAvailability.isAvailable
+        }
+        return true
+    }
 
     /// Composite count across the deduplicated working and durable layers.
     public var count: Int {
@@ -54,6 +99,9 @@ public actor DefaultAgentMemory: Memory, MemoryPromptDescriptor, MemorySessionLi
         self.contextMemory = try ContextCoreMemory(configuration: configuration.contextCoreConfiguration)
         self.memoryPromptTitle = "ContextCore + Wax Memory Context"
         self.memoryPromptGuidance = "Use the ContextCore section first for current-session context. Use the Wax section only for durable recall that does not conflict."
+        let embedder = configuration.contextCoreConfiguration.contextConfiguration.embeddingProvider
+        self.tracksDefaultCoreMLEmbedder = SemanticEmbeddingAvailability.tracksDefaultCoreML(for: embedder)
+        self.usesDegradedHashEmbedder = SemanticEmbeddingAvailability.isKnownDegradedDefault(for: embedder)
     }
 
     public func add(_ message: MemoryMessage) async {
@@ -82,7 +130,55 @@ public actor DefaultAgentMemory: Memory, MemoryPromptDescriptor, MemorySessionLi
     }
 
     public func context(for query: MemoryQuery) async -> String {
-        await context(for: query.text, tokenLimit: query.tokenLimit)
+        guard query.tokenLimit > 0 else {
+            return ""
+        }
+
+        let primaryBudget = max(1, Int(Double(query.tokenLimit) * 0.7))
+        let secondaryBudget = query.tokenLimit
+
+        let primaryAllowance = query.maxItems == 1 ? 1 : max(1, query.maxItems - 1)
+        async let primaryItemsTask = contextMemory.promptItems(
+            for: query.text,
+            tokenLimit: primaryBudget,
+            maxItems: primaryAllowance,
+            maxItemTokens: query.maxItemTokens,
+            estimate: Self.estimatePromptTokens
+        )
+        let secondaryItems = await waxPromptItems(
+            for: MemoryQuery(
+                text: query.text,
+                tokenLimit: secondaryBudget,
+                maxItems: query.maxItems,
+                maxItemTokens: query.maxItemTokens
+            )
+        )
+        let primaryItems = await primaryItemsTask
+
+        let primary = await MemoryPromptAssembly.limit(
+            primaryItems,
+            maxItems: primaryAllowance,
+            maxItemTokens: query.maxItemTokens,
+            tokenLimit: primaryBudget,
+            estimate: Self.estimatePromptTokens
+        )
+
+        let secondaryAllowance = max(0, query.maxItems - primary.count)
+        let secondary = await MemoryPromptAssembly.limit(
+            secondaryItems,
+            maxItems: secondaryAllowance,
+            maxItemTokens: query.maxItemTokens,
+            tokenLimit: secondaryBudget,
+            estimate: Self.estimatePromptTokens
+        )
+
+        return await formatContext(
+            primary: primary.map(\.text).joined(separator: "\n\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            secondary: secondary.map(\.text).joined(separator: "\n\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            tokenLimit: query.tokenLimit
+        )
     }
 
     public func allMessages() async -> [MemoryMessage] {
@@ -116,6 +212,21 @@ public actor DefaultAgentMemory: Memory, MemoryPromptDescriptor, MemorySessionLi
     public func clear() async {
         await contextMemory.clear()
 
+        if let task = waxMemoryTask {
+            // Join in-flight construction instead of cancelling it: cancel is
+            // cooperative and the detached open ignores it, so a cancelled
+            // task would still complete and reinstall its store over this
+            // reset. The slot stays set while joining so late callers join
+            // the same open instead of starting a second one.
+            if let memory = try? await task.value {
+                await memory.clear()
+                waxMemory = memory
+                waxMemoryTask = nil
+                return
+            }
+            // Construction failed; its owner settles the slot. Fall through
+            // to clear whatever state exists now.
+        }
         if let waxMemory {
             await waxMemory.clear()
         } else {
@@ -147,19 +258,40 @@ public actor DefaultAgentMemory: Memory, MemoryPromptDescriptor, MemorySessionLi
 
     private let configuration: Configuration
     private let contextMemory: ContextCoreMemory
+    private nonisolated let tracksDefaultCoreMLEmbedder: Bool
+    private nonisolated let usesDegradedHashEmbedder: Bool
     private var waxMemory: WaxMemory?
+    private var waxMemoryTask: Task<WaxMemory, Error>?
 
     private func ensureWaxMemory() async throws -> WaxMemory {
         if let waxMemory {
             return waxMemory
         }
+        if let waxMemoryTask {
+            return try await waxMemoryTask.value
+        }
 
-        let memory = try await WaxMemory(
-            url: configuration.waxStoreURL,
-            configuration: configuration.waxConfiguration
-        )
-        waxMemory = memory
-        return memory
+        // Memoize the in-flight construction: concurrent callers must join it
+        // instead of opening the same store twice. Wax takes an exclusive
+        // file lock per open, so a second concurrent open blocks until the
+        // first closes — which never happens while it is stored here.
+        // Detached (with captured values) so awaiting it never re-enters
+        // this actor.
+        let url = configuration.waxStoreURL
+        let waxConfiguration = configuration.waxConfiguration
+        let task = Task.detached {
+            try await WaxMemory(url: url, configuration: waxConfiguration)
+        }
+        waxMemoryTask = task
+        do {
+            let memory = try await task.value
+            waxMemory = memory
+            waxMemoryTask = nil
+            return memory
+        } catch {
+            waxMemoryTask = nil
+            throw error
+        }
     }
 
     private func waxContext(for query: String, tokenLimit: Int) async -> String {
@@ -174,6 +306,24 @@ public actor DefaultAgentMemory: Memory, MemoryPromptDescriptor, MemorySessionLi
             Log.memory.warning("DefaultAgentMemory: Failed to retrieve Wax context: \(error.localizedDescription)")
             return ""
         }
+    }
+
+    private func waxPromptItems(for query: MemoryQuery) async -> [MemoryPromptItem] {
+        guard query.tokenLimit > 0 else {
+            return []
+        }
+
+        do {
+            let wax = try await ensureWaxMemory()
+            return await wax.promptItems(for: query.text)
+        } catch {
+            Log.memory.warning("DefaultAgentMemory: Failed to retrieve Wax context: \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    private static func estimatePromptTokens(_ text: String) async -> Int {
+        await PromptTokenBudgeting.countTokens(in: text)
     }
 
     private func formatContext(primary: String, secondary: String, tokenLimit: Int) async -> String {
@@ -340,3 +490,14 @@ public actor DefaultAgentMemory: Memory, MemoryPromptDescriptor, MemorySessionLi
         return String(text[..<end])
     }
 }
+
+enum SemanticMemoryDiagnostics {
+    static var lastWarning: String? {
+        SemanticEmbeddingAvailability.lastWarningMessage
+    }
+
+    static func reset() {
+        SemanticEmbeddingAvailability.resetForTesting()
+    }
+}
+#endif

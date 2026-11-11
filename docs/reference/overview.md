@@ -1,6 +1,6 @@
 # API Reference
 
-The current API reference covers the supported public surface for Swarm 0.5.1. Prefer the front-facing API page for user-facing examples and the API catalog for source-derived symbol lookup.
+The current API reference covers the supported public surface for Swarm 0.6.6. Prefer the front-facing API page for user-facing examples and the API catalog for source-derived symbol lookup.
 
 ## By Topic
 
@@ -8,13 +8,19 @@ The current API reference covers the supported public surface for Swarm 0.5.1. P
 |---|---|
 | [Agents](/reference/front-facing-api) | Agent types, configuration, and the canonical initializer |
 | [Tools](/reference/front-facing-api) | `@Tool` macro, `FunctionTool`, and `ToolCollection` |
-| [Workflow](/guide/getting-started) | Fluent workflow composition and execution |
+| [Workflow](/guide/getting-started) | Fluent last-answer chain: sequential, parallel, routed execution |
+| [Job](/reference/front-facing-api) | Shared notes, per-helper briefs, late N fan-out |
+| [Durable execution](/guide/durable-execution) | Checkpoint/resume, signatures, pruning |
 | [Handoffs](/reference/front-facing-api) | Agent handoffs and routing between runtime agents |
-| [Memory](/reference/front-facing-api) | Conversation, Vector, Summary, SwiftData backends |
+| [Memory](/reference/front-facing-api) | Package default (`Agent.makeDefaultMemory()`), Conversation, Vector, Summary, SwiftData backends; file sessions and snapshots |
 | [Streaming](/reference/front-facing-api) | `AgentEvent` streaming and text output |
 | [Guardrails](/reference/front-facing-api) | Input/output validation, tripwires |
-| [Resilience](/reference/api-catalog) | Retry, circuit breakers, fallback, timeouts |
+| [Resilience](/reference/api-catalog) | Retry (`maxAttempts` counts total attempts, minimum 1), circuit breakers, fallback, timeouts |
 | [Observability](/guide/opentelemetry-tracing) | Tracing, OpenTelemetry, `OSLogTracer`, `SwiftLogTracer`, metrics |
 | [MCP](/reference/api-catalog) | Model Context Protocol client and server |
-| [Providers](/reference/front-facing-api) | Inference providers, `MultiProvider` routing, provider factories |
-| [Durable Runtime Hardening](/reference/durable-runtime-hardening) | Internal implementation note covering run control, checkpoint capability, and deterministic transcript/state hashing |
+| [Providers](/reference/front-facing-api) | Foundation Models (on-device plus OS 27 `LanguageModel` / PCC), OpenAI-compatible remote, `InferenceProvider`, text-only backend wrap, `MultiProvider` routing, `FailoverProvider` chains |
+| [Remote providers](/guide/remote-providers) | OpenAI / Azure / OpenRouter / Ollama / LM Studio |
+| [Secret storage](/guide/secret-storage) | Keychain-backed API keys, redaction, checkpoint file permissions |
+| [Foundation Models modes](/guide/foundation-models) | Capture vs provider-owned tool loop; OS 27 PCC via `.foundationModels(model:)` / `.privateCloudCompute()`; owned-loop `reasoningLevel` and native profile sessions; image attachments; Swarm profile / history → `Transcript`; capture `Transcript` rehydration; `.specific` tool-choice stays prompt-only |
+| [Voice](/guide/voice) | Turn-based `VoiceSession` coordinator; `SpeechToText` / `TextToSpeech` adapters |
+| [Deprecation sunset](/reference/front-facing-api) | Removal schedule for deprecated API; public-log redaction |

@@ -1,3 +1,4 @@
+#if SWARM_OTEL
 // OpenTelemetryAgentRuntime.swift
 // SwarmOpenTelemetry
 
@@ -146,15 +147,17 @@ private extension OpenTelemetryAgentRuntime {
         builder.setAttribute(key: "swarm.request.input_length", value: input.count)
 
         return try await builder.withActiveSpan { span in
-            do {
-                let result = try await withInstrumentedProviderEnvironment {
-                    try await body(span)
+            try await OpenTelemetryTracePropagation.withCurrentSpan(span) {
+                do {
+                    let result = try await withInstrumentedProviderEnvironment {
+                        try await body(span)
+                    }
+                    span.status = .ok
+                    return result
+                } catch {
+                    OpenTelemetryAttributes.recordError(error, on: span)
+                    throw error
                 }
-                span.status = .ok
-                return result
-            } catch {
-                OpenTelemetryAttributes.recordError(error, on: span)
-                throw error
             }
         }
     }
@@ -228,3 +231,4 @@ public extension AgentRuntime {
         )
     }
 }
+#endif

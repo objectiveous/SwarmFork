@@ -1,3 +1,4 @@
+#if SWARM_INTEGRATIONS
 // RetryPolicyBridgeTests.swift
 // HiveSwarm
 //
@@ -107,6 +108,44 @@ struct RetryPolicyBridgeTests {
             Issue.record("Expected .exponentialBackoff for negative maxDelay, got \(hive)")
         }
     }
+
+    @Test("Single total attempt maps to .none")
+    func bridge_singleAttempt_mapsToNone() {
+        let swarm = RetryPolicy(maxAttempts: 1, backoff: .immediate)
+        let hive = RetryPolicyBridge.toHive(swarm)
+        switch hive {
+        case .none:
+            break
+        default:
+            Issue.record("Expected .none for maxAttempts 1, got \(hive)")
+        }
+    }
+
+    @Test("Invalid maxAttempts passes through for Hive validation instead of .none")
+    func bridge_invalidMaxAttempts_passesThrough() {
+        for invalid in [0, -2] {
+            let swarm = RetryPolicy(maxAttempts: invalid, backoff: .immediate)
+            let hive = RetryPolicyBridge.toHive(swarm)
+            switch hive {
+            case .exponentialBackoff(_, _, let maxAttempts, _):
+                #expect(maxAttempts == invalid)
+            case .none:
+                Issue.record("Invalid maxAttempts \(invalid) must not map to .none")
+            }
+        }
+    }
+
+    @Test("Bridge preserves the unified total-attempt budget verbatim")
+    func bridge_preservesTotalAttempts() {
+        let swarm = RetryPolicy(maxAttempts: 4, backoff: .fixed(delay: 0.5))
+        let hive = RetryPolicyBridge.toHive(swarm)
+        switch hive {
+        case .exponentialBackoff(_, _, let maxAttempts, _):
+            #expect(maxAttempts == 4)
+        default:
+            Issue.record("Expected .exponentialBackoff, got \(hive)")
+        }
+    }
 }
 
 @Suite("ChatGraph retry behavior")
@@ -160,6 +199,52 @@ struct HiveAgentsRetryTests {
         default:
             Issue.record("Expected finished outcome, got \(outcome)")
         }
+    }
+
+    @Test("Huge finite retry delay growth clamps instead of trapping")
+    func modelNode_hugeFiniteRetryDelayGrowthClamps() async throws {
+        let script = RetryModelScript(failCount: 1, successChunks: [
+            .final(HiveChatResponse(message: retryAssistantMsg(id: "m1", content: "success")))
+        ])
+
+        let context = RuntimeContext(
+            modelName: "test-model",
+            toolApprovalPolicy: .never,
+            retryPolicy: .exponentialBackoff(
+                initialNanoseconds: UInt64.max,
+                factor: 2.0,
+                maxAttempts: 2,
+                maxNanoseconds: 0
+            )
+        )
+
+        let graph = try ChatGraph.makeToolUsingChatAgent()
+        let environment = HiveEnvironment<ChatGraph.Schema>(
+            context: context,
+            clock: RetryTestClock(),
+            logger: RetryTestLogger(),
+            model: AnyHiveModelClient(RetryScriptedModelClient(script: script)),
+            modelRouter: nil,
+            tools: AnyHiveToolRegistry(RetryStubToolRegistry(resultContent: "ok")),
+            checkpointStore: nil
+        )
+
+        let runtime = try HiveRuntime(graph: graph, environment: environment)
+        let handle = await runtime.run(
+            threadID: HiveThreadID("retry-overflow-test"),
+            input: "Hello",
+            options: HiveRunOptions(maxSteps: 5, checkpointPolicy: .disabled)
+        )
+        let outcome = try await handle.outcome.value
+
+        guard case .finished(let output, _) = outcome,
+              case .fullStore(let store) = output
+        else {
+            Issue.record("Expected finished fullStore outcome, got \(outcome)")
+            return
+        }
+
+        #expect(try store.get(ChatGraph.Schema.finalAnswerKey) == "success")
     }
 
     @Test("No retry policy means immediate failure")
@@ -270,3 +355,4 @@ private struct RetryTestLogger: HiveLogger {
 private func retryAssistantMsg(id: String, content: String) -> HiveChatMessage {
     HiveChatMessage(id: id, role: .assistant, content: content, toolCalls: [], op: nil)
 }
+#endif

@@ -1,3 +1,6 @@
+// P2-1 grandfather: split pending; new files are gated at 1000 lines.
+// swiftlint:disable file_length
+#if SWARM_INTEGRATIONS
 import Foundation
 import Wax
 
@@ -23,7 +26,7 @@ import Glibc
 import PDFKit
 #endif
 
-public enum WebPageType: String, Codable, Sendable, Equatable {
+enum WebPageType: String, Codable, Sendable, Equatable {
     case docs
     case apiReference
     case blog
@@ -34,7 +37,7 @@ public enum WebPageType: String, Codable, Sendable, Equatable {
     case generic
 }
 
-public enum WebHostTrustProfile: String, Codable, Sendable, Equatable {
+enum WebHostTrustProfile: String, Codable, Sendable, Equatable {
     case officialDocs
     case officialProduct
     case reference
@@ -43,17 +46,17 @@ public enum WebHostTrustProfile: String, Codable, Sendable, Equatable {
     case unknown
 }
 
-public struct WebSearchHit: Codable, Sendable, Equatable {
-    public var id: String
-    public var title: String
-    public var url: String
-    public var snippet: String
-    public var score: Double
-    public var source: String
-    public var cached: Bool
-    public var artifactID: String?
+struct WebSearchHit: Codable, Sendable, Equatable {
+    var id: String
+    var title: String
+    var url: String
+    var snippet: String
+    var score: Double
+    var source: String
+    var cached: Bool
+    var artifactID: String?
 
-    public init(
+    init(
         id: String,
         title: String,
         url: String,
@@ -74,14 +77,14 @@ public struct WebSearchHit: Codable, Sendable, Equatable {
     }
 }
 
-public struct CitationRecord: Codable, Sendable, Equatable {
-    public var artifactID: String
-    public var sectionID: String
-    public var url: String
-    public var title: String
-    public var snippet: String
+struct CitationRecord: Codable, Sendable, Equatable {
+    var artifactID: String
+    var sectionID: String
+    var url: String
+    var title: String
+    var snippet: String
 
-    public init(
+    init(
         artifactID: String,
         sectionID: String,
         url: String,
@@ -96,16 +99,16 @@ public struct CitationRecord: Codable, Sendable, Equatable {
     }
 }
 
-public struct WebSectionChunk: Codable, Sendable, Equatable {
-    public var id: String
-    public var artifactID: String
-    public var heading: String
-    public var text: String
-    public var index: Int
-    public var pageType: WebPageType
-    public var citations: [CitationRecord]
+struct WebSectionChunk: Codable, Sendable, Equatable {
+    var id: String
+    var artifactID: String
+    var heading: String
+    var text: String
+    var index: Int
+    var pageType: WebPageType
+    var citations: [CitationRecord]
 
-    public init(
+    init(
         id: String,
         artifactID: String,
         heading: String,
@@ -124,21 +127,21 @@ public struct WebSectionChunk: Codable, Sendable, Equatable {
     }
 }
 
-public struct WebArtifactRecord: Codable, Sendable, Equatable {
-    public var artifactID: String
-    public var canonicalURL: String
-    public var title: String
-    public var contentType: String
-    public var fetchedAt: Date
-    public var contentHash: String
-    public var etag: String?
-    public var lastModified: String?
-    public var pageType: WebPageType
-    public var hostTrust: WebHostTrustProfile
-    public var freshnessScore: Double
-    public var rawArtifactRef: String
+struct WebArtifactRecord: Codable, Sendable, Equatable {
+    var artifactID: String
+    var canonicalURL: String
+    var title: String
+    var contentType: String
+    var fetchedAt: Date
+    var contentHash: String
+    var etag: String?
+    var lastModified: String?
+    var pageType: WebPageType
+    var hostTrust: WebHostTrustProfile
+    var freshnessScore: Double
+    var rawArtifactRef: String
 
-    public init(
+    init(
         artifactID: String,
         canonicalURL: String,
         title: String,
@@ -167,17 +170,17 @@ public struct WebArtifactRecord: Codable, Sendable, Equatable {
     }
 }
 
-public struct NormalizedWebDocument: Codable, Sendable, Equatable {
-    public var artifactID: String
-    public var canonicalURL: String
-    public var title: String
-    public var summary: String
-    public var pageType: WebPageType
-    public var contentType: String
-    public var fetchedAt: Date
-    public var sections: [WebSectionChunk]
+struct NormalizedWebDocument: Codable, Sendable, Equatable {
+    var artifactID: String
+    var canonicalURL: String
+    var title: String
+    var summary: String
+    var pageType: WebPageType
+    var contentType: String
+    var fetchedAt: Date
+    var sections: [WebSectionChunk]
 
-    public init(
+    init(
         artifactID: String,
         canonicalURL: String,
         title: String,
@@ -198,14 +201,14 @@ public struct NormalizedWebDocument: Codable, Sendable, Equatable {
     }
 }
 
-public struct GroundedEvidence: Codable, Sendable, Equatable {
-    public var query: String
-    public var answer: String
-    public var evidenceSections: [WebSectionChunk]
-    public var citations: [CitationRecord]
-    public var bundleID: String?
+struct GroundedEvidence: Codable, Sendable, Equatable {
+    var query: String
+    var answer: String
+    var evidenceSections: [WebSectionChunk]
+    var citations: [CitationRecord]
+    var bundleID: String?
 
-    public init(
+    init(
         query: String,
         answer: String,
         evidenceSections: [WebSectionChunk],
@@ -220,16 +223,16 @@ public struct GroundedEvidence: Codable, Sendable, Equatable {
     }
 }
 
-public struct EvidenceBundleRecord: Codable, Sendable, Equatable {
-    public var bundleID: String
-    public var query: String
-    public var artifactIDs: [String]
-    public var sectionIDs: [String]
-    public var summary: String
-    public var createdAt: Date
-    public var updatedAt: Date
+struct EvidenceBundleRecord: Codable, Sendable, Equatable {
+    var bundleID: String
+    var query: String
+    var artifactIDs: [String]
+    var sectionIDs: [String]
+    var summary: String
+    var createdAt: Date
+    var updatedAt: Date
 
-    public init(
+    init(
         bundleID: String,
         query: String,
         artifactIDs: [String],
@@ -248,23 +251,23 @@ public struct EvidenceBundleRecord: Codable, Sendable, Equatable {
     }
 }
 
-public struct WebSearchEnvelope: Codable, Sendable, Equatable {
-    public var mode: String
-    public var summary: String
-    public var final4KAnswer: String
-    public var semanticCore: String?
-    public var hits: [WebSearchHit]
-    public var artifact: WebArtifactRecord?
-    public var normalizedDocument: NormalizedWebDocument?
-    public var sectionChunks: [WebSectionChunk]
-    public var groundedEvidence: GroundedEvidence?
-    public var citations: [CitationRecord]
-    public var artifactRefs: [String]
-    public var bundle: EvidenceBundleRecord?
-    public var cacheStatus: String
-    public var rawArtifactRef: String?
+struct WebSearchEnvelope: Codable, Sendable, Equatable {
+    var mode: String
+    var summary: String
+    var final4KAnswer: String
+    var semanticCore: String?
+    var hits: [WebSearchHit]
+    var artifact: WebArtifactRecord?
+    var normalizedDocument: NormalizedWebDocument?
+    var sectionChunks: [WebSectionChunk]
+    var groundedEvidence: GroundedEvidence?
+    var citations: [CitationRecord]
+    var artifactRefs: [String]
+    var bundle: EvidenceBundleRecord?
+    var cacheStatus: String
+    var rawArtifactRef: String?
 
-    public init(
+    init(
         mode: String,
         summary: String,
         final4KAnswer: String,
@@ -341,10 +344,11 @@ internal actor WebToolRuntime {
 
     func execute(
         request: WebToolRequest,
-        configuration: WebSearchTool.Configuration
+        configuration: WebSearchTool.Configuration,
+        secretStore: (any SecretStore)? = nil
     ) async throws -> WebSearchEnvelope {
         let store = try await store(for: configuration)
-        let engine = WebExecutionEngine(configuration: configuration, store: store)
+        let engine = WebExecutionEngine(configuration: configuration, store: store, secretStore: secretStore)
         return try await engine.execute(request: request)
     }
 
@@ -363,6 +367,7 @@ internal actor WebToolRuntime {
 internal struct WebExecutionEngine: Sendable {
     let configuration: WebSearchTool.Configuration
     let store: WaxWebArtifactStore
+    let secretStore: (any SecretStore)?
 
     func execute(request: WebToolRequest) async throws -> WebSearchEnvelope {
         switch request.mode {
@@ -589,7 +594,7 @@ internal struct WebExecutionEngine: Sendable {
             return []
         }
         Log.agents.info("[WebSearchTool] liveSearch: query='\(query)', maxResults=\(request.maxResults), domains=\(request.domains), recencyDays=\(request.recencyDays ?? -1)")
-        let hits = try await TavilySearchBackend(configuration: configuration).search(
+        let hits = try await TavilySearchBackend(configuration: configuration, secretStore: secretStore).search(
             query: query,
             maxResults: request.maxResults,
             domains: request.domains,
@@ -854,9 +859,9 @@ internal actor WaxWebArtifactStore {
         bundlesURL = rootURL.appendingPathComponent("bundles", isDirectory: true)
         indexURL = rootURL.appendingPathComponent("web-index.wax")
 
-        try FileManager.default.createDirectory(at: manifestsURL, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: rawURL, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: bundlesURL, withIntermediateDirectories: true)
+        try SecureFileIO.createDirectory(at: manifestsURL)
+        try SecureFileIO.createDirectory(at: rawURL)
+        try SecureFileIO.createDirectory(at: bundlesURL)
 
         var waxConfig = Wax.Memory.Config.default
         waxConfig.enableVectorSearch = false
@@ -872,7 +877,7 @@ internal actor WaxWebArtifactStore {
         let manifestURL = manifestsURL.appendingPathComponent("\(artifact.artifact.artifactID).json")
         let rawURL = URL(fileURLWithPath: artifact.artifact.rawArtifactRef)
         let data = try encoder.encode(artifact)
-        try data.write(to: manifestURL, options: .atomic)
+        try SecureFileIO.write(data, to: manifestURL)
         try await rebuildIndex()
 
         if !FileManager.default.fileExists(atPath: rawURL.path) {
@@ -986,7 +991,7 @@ internal actor WaxWebArtifactStore {
             updatedAt: now
         )
         let url = bundlesURL.appendingPathComponent("\(bundle.bundleID).json")
-        try encoder.encode(bundle).write(to: url, options: .atomic)
+        try SecureFileIO.write(encoder.encode(bundle), to: url)
         return bundle
     }
 
@@ -998,7 +1003,7 @@ internal actor WaxWebArtifactStore {
 
     private func saveLocally(_ artifact: StoredWebArtifact) throws -> StoredWebArtifact {
         let manifestURL = manifestsURL.appendingPathComponent("\(artifact.artifact.artifactID).json")
-        try encoder.encode(artifact).write(to: manifestURL, options: .atomic)
+        try SecureFileIO.write(encoder.encode(artifact), to: manifestURL)
         return artifact
     }
 
@@ -1185,6 +1190,7 @@ internal struct SectionSearchMatch: Sendable {
 
 internal struct TavilySearchBackend: Sendable {
     let configuration: WebSearchTool.Configuration
+    let secretStore: (any SecretStore)?
 
     private struct Response: Decodable {
         let results: [Result]
@@ -1203,7 +1209,8 @@ internal struct TavilySearchBackend: Sendable {
         domains: [String],
         recencyDays: Int?
     ) async throws -> [WebSearchHit] {
-        guard let apiKey = configuration.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !apiKey.isEmpty else {
+        let resolved = try await configuration.resolveAPIKey(using: secretStore)
+        guard let apiKey = resolved?.trimmingCharacters(in: .whitespacesAndNewlines), !apiKey.isEmpty else {
             Log.agents.warning("[TavilySearchBackend] API key is empty — returning 0 hits")
             return []
         }
@@ -1211,7 +1218,7 @@ internal struct TavilySearchBackend: Sendable {
         Log.agents.info("[TavilySearchBackend] POST api.tavily.com/search — query='\(query)', maxResults=\(maxResults)")
 
         guard let url = URL(string: "https://api.tavily.com/search") else {
-            throw AgentError.toolExecutionFailed(toolName: "websearch", underlyingError: "Invalid Tavily URL")
+            throw AgentError.toolFailure(toolName: "websearch", message: "Invalid Tavily URL", cause: nil)
         }
 
         var body: [String: Any] = [
@@ -1233,17 +1240,19 @@ internal struct TavilySearchBackend: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = configuration.fetchTimeout
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        TraceContextHeaders.applyCurrent(to: &request)
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
-            throw AgentError.toolExecutionFailed(toolName: "websearch", underlyingError: "Tavily returned a non-HTTP response")
+            throw AgentError.toolFailure(toolName: "websearch", message: "Tavily returned a non-HTTP response", cause: nil)
         }
         guard http.statusCode == 200 else {
             let errorBody = String(data: data, encoding: .utf8) ?? "(no body)"
             Log.agents.error("[TavilySearchBackend] HTTP \(http.statusCode) — \(errorBody)")
-            throw AgentError.toolExecutionFailed(
+            throw AgentError.toolFailure(
                 toolName: "websearch",
-                underlyingError: "Tavily request failed (HTTP \(http.statusCode)): \(errorBody)"
+                message: "Tavily request failed (HTTP \(http.statusCode)): \(errorBody)",
+                cause: nil
             )
         }
 
@@ -1265,6 +1274,15 @@ internal struct TavilySearchBackend: Sendable {
 
 internal struct SafeWebFetcher: Sendable {
     let configuration: WebSearchTool.Configuration
+    private let sessionConfiguration: URLSessionConfiguration
+
+    init(
+        configuration: WebSearchTool.Configuration,
+        sessionConfiguration: URLSessionConfiguration = .ephemeral
+    ) {
+        self.configuration = configuration
+        self.sessionConfiguration = sessionConfiguration
+    }
 
     func fetch(
         url: URL,
@@ -1278,6 +1296,7 @@ internal struct SafeWebFetcher: Sendable {
         request.timeoutInterval = configuration.fetchTimeout
         request.setValue(configuration.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("gzip, deflate", forHTTPHeaderField: "Accept-Encoding")
+        TraceContextHeaders.applyCurrent(to: &request)
         if let conditionalEtag, !conditionalEtag.isEmpty {
             request.setValue(conditionalEtag, forHTTPHeaderField: "If-None-Match")
         }
@@ -1285,17 +1304,19 @@ internal struct SafeWebFetcher: Sendable {
             request.setValue(conditionalLastModified, forHTTPHeaderField: "If-Modified-Since")
         }
 
-        let redirectDelegate = SafeWebFetchRedirectDelegate()
+        let fetchDelegate = SafeWebFetchDelegate(maxBodyBytes: configuration.maxBodyBytes)
         let session = URLSession(
-            configuration: .ephemeral,
-            delegate: redirectDelegate,
+            configuration: sessionConfiguration,
+            delegate: fetchDelegate,
             delegateQueue: nil
         )
         defer { session.finishTasksAndInvalidate() }
 
-        let (data, response) = try await session.data(for: request)
+        let data: Data
+        let response: URLResponse
+        (data, response) = try await fetchDelegate.fetch(request, using: session)
         guard let http = response as? HTTPURLResponse else {
-            throw AgentError.toolExecutionFailed(toolName: "websearch", underlyingError: "Fetch returned a non-HTTP response")
+            throw AgentError.toolFailure(toolName: "websearch", message: "Fetch returned a non-HTTP response", cause: nil)
         }
         try Self.validate(url: http.url ?? url)
 
@@ -1313,16 +1334,18 @@ internal struct SafeWebFetcher: Sendable {
         }
 
         guard (200 ..< 300).contains(http.statusCode) else {
-            throw AgentError.toolExecutionFailed(
+            throw AgentError.toolFailure(
                 toolName: "websearch",
-                underlyingError: "Fetch failed for \(url.absoluteString) (HTTP \(http.statusCode))"
+                message: "Fetch failed for \(url.absoluteString) (HTTP \(http.statusCode))",
+                cause: nil
             )
         }
 
         guard data.count <= configuration.maxBodyBytes else {
-            throw AgentError.toolExecutionFailed(
+            throw AgentError.toolFailure(
                 toolName: "websearch",
-                underlyingError: "Fetched body exceeded limit of \(configuration.maxBodyBytes) bytes"
+                message: "Fetched body exceeded limit of \(configuration.maxBodyBytes) bytes",
+                cause: nil
             )
         }
 
@@ -1378,19 +1401,223 @@ internal struct SafeWebFetcher: Sendable {
     }
 }
 
-private final class SafeWebFetchRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+private final class SafeWebFetchDelegate: NSObject, URLSessionDataDelegate, URLSessionTaskDelegate, @unchecked Sendable {
+    private let maxBodyBytes: Int
+    private let state = SafeWebFetchDelegateState()
+
+    init(maxBodyBytes: Int) {
+        self.maxBodyBytes = maxBodyBytes
+    }
+
+    func fetch(_ request: URLRequest, using session: URLSession) async throws -> (Data, URLResponse) {
+        let task = SafeWebFetchTask(session.dataTask(with: request))
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                state.start(continuation)
+                task.resume()
+            }
+        } onCancel: {
+            task.cancel()
+            state.finish(throwing: CancellationError())
+        }
+    }
+
+    func urlSession(
+        _: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        guard let url = response.url, SafeWebFetcher.isAllowedURL(url) else {
+            state.finish(
+                throwing: AgentError.invalidToolArguments(
+                    toolName: "websearch",
+                    reason: "Private-network hosts are blocked"
+                )
+            )
+            dataTask.cancel()
+            completionHandler(.cancel)
+            return
+        }
+        state.receive(response: response)
+        completionHandler(.allow)
+    }
+
+    func urlSession(
+        _: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive data: Data
+    ) {
+        do {
+            try state.receive(data: data, maxBodyBytes: maxBodyBytes)
+        } catch {
+            state.finish(throwing: error)
+            dataTask.cancel()
+        }
+    }
+
     func urlSession(
         _: URLSession,
         task _: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        if let error {
+            state.finish(throwing: error)
+        } else {
+            state.finish()
+        }
+    }
+
+    func urlSession(
+        _: URLSession,
+        task: URLSessionTask,
         willPerformHTTPRedirection _: HTTPURLResponse,
         newRequest request: URLRequest,
         completionHandler: @escaping (URLRequest?) -> Void
     ) {
         guard let url = request.url, SafeWebFetcher.isAllowedURL(url) else {
+            state.finish(
+                throwing: AgentError.invalidToolArguments(
+                    toolName: "websearch",
+                    reason: "Private-network hosts are blocked"
+                )
+            )
+            task.cancel()
             completionHandler(nil)
             return
         }
-        completionHandler(request)
+        var redirected = request
+        TraceContextHeaders.applyCurrent(to: &redirected)
+        completionHandler(redirected)
+    }
+}
+
+private final class SafeWebFetchTask: @unchecked Sendable {
+    private let task: URLSessionDataTask
+
+    init(_ task: URLSessionDataTask) {
+        self.task = task
+    }
+
+    func resume() {
+        task.resume()
+    }
+
+    func cancel() {
+        task.cancel()
+    }
+}
+
+private final class SafeWebFetchDelegateState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<(Data, URLResponse), Error>?
+    private var response: URLResponse?
+    private var accumulator = SafeWebBodyAccumulator()
+    private var isFinished = false
+    private var finishedResult: Result<(Data, URLResponse), Error>?
+
+    func start(_ continuation: CheckedContinuation<(Data, URLResponse), Error>) {
+        let result: Result<(Data, URLResponse), Error>? = lock.withLock {
+            if isFinished {
+                return finishedResult ?? .failure(CancellationError())
+            }
+            self.continuation = continuation
+            return nil
+        }
+
+        if let result {
+            Self.resume(continuation, with: result)
+        }
+    }
+
+    func receive(response: URLResponse) {
+        lock.withLock {
+            self.response = response
+        }
+    }
+
+    func receive(data newData: Data, maxBodyBytes: Int) throws {
+        try lock.withLock {
+            try accumulator.append(newData, maxBodyBytes: maxBodyBytes)
+        }
+    }
+
+    func finish() {
+        let result: Result<(Data, URLResponse), Error> = lock.withLock {
+            guard isFinished == false else { return .failure(SafeWebFetchCompletion.alreadyFinished) }
+            isFinished = true
+            guard let response else {
+                let result: Result<(Data, URLResponse), Error> = .failure(
+                    AgentError.toolFailure(
+                        toolName: "websearch",
+                        message: "Fetch returned no response",
+                        cause: nil
+                    )
+                )
+                finishedResult = result
+                return result
+            }
+            let result: Result<(Data, URLResponse), Error> = .success((accumulator.data, response))
+            finishedResult = result
+            return result
+        }
+        resume(with: result)
+    }
+
+    func finish(throwing error: Error) {
+        let result: Result<(Data, URLResponse), Error> = lock.withLock {
+            guard isFinished == false else { return .failure(SafeWebFetchCompletion.alreadyFinished) }
+            isFinished = true
+            let result: Result<(Data, URLResponse), Error> = .failure(error)
+            finishedResult = result
+            return result
+        }
+        resume(with: result)
+    }
+
+    private func resume(with result: Result<(Data, URLResponse), Error>) {
+        let continuation = lock.withLock {
+            let current = self.continuation
+            self.continuation = nil
+            return current
+        }
+        guard let continuation else { return }
+        Self.resume(continuation, with: result)
+    }
+
+    private static func resume(
+        _ continuation: CheckedContinuation<(Data, URLResponse), Error>,
+        with result: Result<(Data, URLResponse), Error>
+    ) {
+        switch result {
+        case let .success(value):
+            continuation.resume(returning: value)
+        case let .failure(error):
+            if (error as? SafeWebFetchCompletion) == .alreadyFinished {
+                return
+            }
+            continuation.resume(throwing: error)
+        }
+    }
+}
+
+private enum SafeWebFetchCompletion: Error {
+    case alreadyFinished
+}
+
+internal struct SafeWebBodyAccumulator: Sendable {
+    private(set) var data = Data()
+
+    mutating func append(_ newData: Data, maxBodyBytes: Int) throws {
+        let nextCount = data.count + newData.count
+        guard nextCount <= maxBodyBytes else {
+            throw AgentError.toolFailure(
+                toolName: "websearch",
+                message: "Fetched body exceeded limit of \(maxBodyBytes) bytes",
+                cause: nil
+            )
+        }
+        data.append(newData)
     }
 }
 
@@ -1453,6 +1680,18 @@ private enum ResolvedHostAddress: Sendable {
         }
 
         #if canImport(Darwin) || canImport(Glibc)
+        #if canImport(Glibc)
+        var hints = addrinfo(
+            ai_flags: AI_ADDRCONFIG,
+            ai_family: AF_UNSPEC,
+            ai_socktype: numericCast(SOCK_STREAM.rawValue),
+            ai_protocol: 0,
+            ai_addrlen: 0,
+            ai_addr: nil,
+            ai_canonname: nil,
+            ai_next: nil
+        )
+        #else
         var hints = addrinfo(
             ai_flags: AI_ADDRCONFIG,
             ai_family: AF_UNSPEC,
@@ -1463,6 +1702,7 @@ private enum ResolvedHostAddress: Sendable {
             ai_addr: nil,
             ai_next: nil
         )
+        #endif
         var result: UnsafeMutablePointer<addrinfo>?
         let status = getaddrinfo(normalizedHost, nil, &hints, &result)
         guard status == 0, let result else {
@@ -1604,7 +1844,7 @@ internal struct WebContentExtractor: Sendable {
             rawFileURL(rootURL: $0, artifactID: artifactID, contentType: payload.contentType)
         }
         if let rawArtifactURL {
-            try payload.data.write(to: rawArtifactURL, options: .atomic)
+            try SecureFileIO.write(payload.data, to: rawArtifactURL)
         }
 
         let normalizedSections = sections.enumerated().map { index, section in
@@ -2071,7 +2311,7 @@ internal func hostTrustProfile(for url: URL) -> WebHostTrustProfile {
 
 internal func rawFileURL(rootURL: URL, artifactID: String, contentType: String) -> URL {
     let root = rootURL
-    try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try? SecureFileIO.createDirectory(at: root)
     let ext: String = if contentType.contains("html") {
         "html"
     } else if contentType.contains("pdf") {
@@ -2130,3 +2370,4 @@ private extension String {
         isEmpty ? nil : self
     }
 }
+#endif

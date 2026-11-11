@@ -1,15 +1,21 @@
+#if SWARM_INTEGRATIONS && canImport(Membrane)
 import Foundation
 import Membrane
+import MembraneContextCore
 import MembraneCore
 
-public actor SessionMembraneAgentAdapter: MembraneAgentAdapter {
+/// Swarm-side adapter over `Membrane.MembraneSession`.
+///
+/// Kept internal: callers use ``MembraneEnvironment/contextCoreSession(configuration:budget:recallStore:pointerStore:initialSnapshot:)``.
+/// The session still receives budget, stores, and snapshot; those arguments are not decorative.
+actor SessionMembraneAgentAdapter: MembraneAgentAdapter {
     private let session: Membrane.MembraneSession
 
-    public init(session: Membrane.MembraneSession) {
+    init(session: Membrane.MembraneSession) {
         self.session = session
     }
 
-    public func plan(
+    func plan(
         prompt: String,
         toolSchemas: [ToolSchema],
         profile _: ContextProfile
@@ -37,10 +43,10 @@ public actor SessionMembraneAgentAdapter: MembraneAgentAdapter {
         )
     }
 
-    public func transformToolResult(
+    func transformToolResult(
         toolName: String,
         output: String,
-        profile: ContextProfile = .balanced
+        profile _: ContextProfile = .balanced
     ) async throws -> MembraneToolResultBoundary {
         switch try await session.transformToolResult(toolName: toolName, output: output) {
         case let .inline(text):
@@ -53,7 +59,7 @@ public actor SessionMembraneAgentAdapter: MembraneAgentAdapter {
         }
     }
 
-    public func handleInternalToolCall(
+    func handleInternalToolCall(
         name: String,
         arguments: [String: SendableValue]
     ) async throws -> String? {
@@ -63,20 +69,16 @@ public actor SessionMembraneAgentAdapter: MembraneAgentAdapter {
         )
     }
 
-    public func restore(checkpointData: Data?) async throws {
+    func restore(checkpointData: Data?) async throws {
         let snapshot = try checkpointData.map { try JSONDecoder().decode(ContextSnapshot.self, from: $0) }
         try await session.restore(snapshot: snapshot)
     }
 
-    public func snapshotCheckpointData() async throws -> Data? {
+    func snapshotCheckpointData() async throws -> Data? {
         guard let snapshot = try await session.snapshot() else {
             return nil
         }
         return try JSONEncoder().encode(snapshot)
-    }
-
-    public func contextSnapshot() async throws -> ContextSnapshot? {
-        try await session.snapshot()
     }
 
     private func stringify(arguments: [String: SendableValue]) -> [String: String] {
@@ -106,6 +108,10 @@ public actor SessionMembraneAgentAdapter: MembraneAgentAdapter {
 }
 
 public extension MembraneEnvironment {
+    /// Builds an enabled Membrane environment backed by `Membrane.MembraneSession`.
+    ///
+    /// `budget`, `recallStore`, `pointerStore`, and `initialSnapshot` are forwarded
+    /// into that session. They change planning, pointerization, recall, and restore.
     static func contextCoreSession(
         configuration: MembraneFeatureConfiguration = .default,
         budget: MembraneCore.ContextBudget = MembraneCore.ContextBudget(
@@ -117,15 +123,9 @@ public extension MembraneEnvironment {
         initialSnapshot: MembraneCore.ContextSnapshot? = nil
     ) -> MembraneEnvironment {
         let session = Membrane.MembraneSession(
-            configuration: Membrane.MembraneFeatureConfiguration(
-                jitMinToolCount: configuration.jitMinToolCount,
-                defaultJITLoadCount: configuration.defaultJITLoadCount,
-                pointerThresholdBytes: configuration.pointerThresholdBytes,
-                pointerSummaryMaxChars: configuration.pointerSummaryMaxChars,
-                runtimeFeatureFlags: configuration.runtimeFeatureFlags,
-                runtimeModelAllowlist: configuration.runtimeModelAllowlist
-            ),
+            configuration: configuration.makeMembraneSessionConfiguration(),
             budget: budget,
+            backend: MembraneContextCoreBackend(),
             recallStore: recallStore,
             pointerStore: pointerStore,
             initialSnapshot: initialSnapshot
@@ -138,3 +138,18 @@ public extension MembraneEnvironment {
         )
     }
 }
+
+extension MembraneFeatureConfiguration {
+    /// Maps Swarm's public configuration onto Membrane's internal session type.
+    func makeMembraneSessionConfiguration() -> Membrane.MembraneFeatureConfiguration {
+        Membrane.MembraneFeatureConfiguration(
+            jitMinToolCount: jitMinToolCount,
+            defaultJITLoadCount: defaultJITLoadCount,
+            pointerThresholdBytes: pointerThresholdBytes,
+            pointerSummaryMaxChars: pointerSummaryMaxChars,
+            runtimeFeatureFlags: runtimeFeatureFlags,
+            runtimeModelAllowlist: runtimeModelAllowlist
+        )
+    }
+}
+#endif

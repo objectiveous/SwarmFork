@@ -1,3 +1,4 @@
+#if SWARM_MCP
 import Foundation
 import MCP
 @testable import Swarm
@@ -46,7 +47,7 @@ struct SwarmMCPServerServiceTests {
         )
 
         #expect(result.isError != true)
-        #expect(result.content == [.text("HELLO")])
+        #expect(textContent(from: result.content) == "HELLO")
     }
 
     @Test("ListTools returns deterministic stable ordering and schemas")
@@ -109,7 +110,7 @@ struct SwarmMCPServerServiceTests {
         )
 
         #expect(result.isError != true)
-        #expect(result.content == [.text("hello")])
+        #expect(textContent(from: result.content) == "hello")
 
         let invocations = await executor.invocationsSnapshot()
         #expect(invocations.count == 1)
@@ -164,7 +165,7 @@ struct SwarmMCPServerServiceTests {
             schemas: [ToolSchema(name: "explode", description: "explode", parameters: [])]
         )
         let executor = SwarmMCPToolExecutorStub { _, _ in
-            throw AgentError.toolExecutionFailed(toolName: "explode", underlyingError: "boom")
+            throw AgentError.toolFailure(toolName: "explode", message: "boom", cause: nil)
         }
         let harness = try await SwarmMCPTestHarness.make(catalog: catalog, executor: executor)
         defer {
@@ -276,7 +277,7 @@ struct SwarmMCPServerServiceTests {
                         arguments: ["value": .int(i)]
                     )
                     guard
-                        case let .text(text: text, annotations: _, _meta: _)? = result.content.first,
+                        let text = textContent(from: result.content),
                         let parsed = Int(text)
                     else {
                         throw SwarmMCPServerServiceTestError.unreachable("unexpected content")
@@ -412,6 +413,13 @@ struct SwarmMCPServerServiceTests {
     }
 }
 
+private func textContent(from content: [MCP.Tool.Content]) -> String? {
+    guard case let .text(text: text, annotations: _, _meta: _)? = content.first else {
+        return nil
+    }
+    return text
+}
+
 private func metadataObject(from content: [MCP.Tool.Content]) throws -> [String: Value] {
     for item in content {
         if case let .resource(resource: resourceContent, annotations: _, _meta: _) = item,
@@ -429,3 +437,4 @@ private func metadataObject(from content: [MCP.Tool.Content]) throws -> [String:
     Issue.record("Expected JSON metadata in tool content")
     return [:]
 }
+#endif

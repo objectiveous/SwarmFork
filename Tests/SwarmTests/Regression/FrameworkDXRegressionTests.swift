@@ -63,6 +63,18 @@ struct FrameworkDXRegressionTests {
         #expect(object["1"] == "fast-one")
     }
 
+    @Test("Workflow indexed parallel merge preserves agent input order")
+    func workflowParallelIndexedMergePreservesInputOrder() async throws {
+        let slow = OrderedWorkflowAgent(output: "slow-zero", delay: .milliseconds(120))
+        let fast = OrderedWorkflowAgent(output: "fast-one", delay: .milliseconds(10))
+
+        let result = try await Workflow()
+            .parallel([slow, fast], merge: .indexed)
+            .run("input")
+
+        #expect(result.output == "[0]: slow-zero\n[1]: fast-one")
+    }
+
     @Test("MCP tool cache invalidation wins over in-flight refresh")
     func mcpToolCacheInvalidationWinsOverInflightRefresh() async throws {
         let client = MCPClient()
@@ -168,13 +180,25 @@ struct FrameworkDXRegressionTests {
     @Test("Workflow timeout returns without waiting for non-cooperative work")
     func workflowTimeoutReturnsWithoutWaitingForNonCooperativeWork() async throws {
         let agent = BlockingWorkflowAgent()
+        let timeout: Duration = .milliseconds(200)
         let start = ContinuousClock.now
 
-        await #expect(throws: AgentError.self) {
-            _ = try await Workflow()
+        let task = Task {
+            try await Workflow()
                 .step(agent)
-                .timeout(.milliseconds(50))
+                .timeout(timeout)
                 .run("input")
+        }
+
+        await agent.waitUntilBlocked()
+
+        do {
+            _ = try await task.value
+            Issue.record("Expected workflow timeout")
+        } catch AgentError.timeout(let duration) {
+            #expect(duration == timeout)
+        } catch {
+            Issue.record("Expected workflow timeout, got \(error)")
         }
 
         let elapsed = ContinuousClock.now - start
@@ -281,7 +305,7 @@ private struct OrderedWorkflowAgent: AgentRuntime {
     func cancel() async {}
 }
 
-private actor BlockingToolListServer: MCPServer {
+private actor BlockingToolListServer: MCPServerConnection {
     let name: String
     private var tools: [ToolSchema]
     private var blockedContinuation: CheckedContinuation<Void, Never>?
@@ -350,7 +374,7 @@ private actor BlockingToolListServer: MCPServer {
     }
 }
 
-private actor BlockingResourceListServer: MCPServer {
+private actor BlockingResourceListServer: MCPServerConnection {
     let name: String
     private var resources: [MCPResource]
     private var blockedContinuation: CheckedContinuation<Void, Never>?
@@ -424,10 +448,27 @@ private actor BlockingWorkflowAgent: AgentRuntime {
     nonisolated let instructions = "Block until released."
     nonisolated let configuration = AgentConfiguration.default
     private var continuation: CheckedContinuation<Void, Never>?
+    private var blockedWaiters: [CheckedContinuation<Void, Never>] = []
+
+    var isBlocked: Bool {
+        continuation != nil
+    }
+
+    func waitUntilBlocked() async {
+        if continuation != nil {
+            return
+        }
+        await withCheckedContinuation { waiter in
+            blockedWaiters.append(waiter)
+        }
+    }
 
     func run(_ input: String, session _: (any Session)?, observer _: (any AgentObserver)?) async throws -> AgentResult {
         await withCheckedContinuation { continuation in
             self.continuation = continuation
+            let waiters = blockedWaiters
+            blockedWaiters.removeAll()
+            waiters.forEach { $0.resume() }
         }
         return AgentResult(output: input)
     }
@@ -451,7 +492,7 @@ private actor BlockingWorkflowAgent: AgentRuntime {
     }
 }
 
-private actor StreamingNameProvider: InferenceProvider {
+private actor StreamingNameProvider: InferenceProvider, MessagesFromPromptInference {
     let name: String
 
     init(name: String) {
