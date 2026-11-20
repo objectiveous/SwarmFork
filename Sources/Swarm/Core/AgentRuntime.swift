@@ -762,6 +762,12 @@ public struct InferenceResponse: Sendable, Equatable {
     /// synthesizing a single assistant turn.
     public let transcriptMessages: [InferenceMessage]
 
+    /// Finished thinking blocks produced with this response, in order.
+    ///
+    /// Empty unless the provider reports thinking. Agent stores them on the
+    /// assistant message so they are sent back unchanged with the tool results.
+    public let reasoning: [InferenceReasoning]
+
     /// Whether this response includes tool calls.
     public var hasToolCalls: Bool {
         !toolCalls.isEmpty
@@ -774,17 +780,20 @@ public struct InferenceResponse: Sendable, Equatable {
     ///   - finishReason: Finish reason. Default: .completed
     ///   - usage: Token usage statistics. Default: nil
     ///   - transcriptMessages: Provider-owned turn transcript. Default: []
+    ///   - reasoning: Finished thinking blocks. Default: []
     public init(
         content: String? = nil,
         toolCalls: [ParsedToolCall] = [],
         finishReason: FinishReason = .completed,
         usage: TokenUsage? = nil,
-        transcriptMessages: [InferenceMessage] = []
+        transcriptMessages: [InferenceMessage] = [],
+        reasoning: [InferenceReasoning] = []
     ) {
         self.content = content
         self.toolCalls = toolCalls
         self.finishReason = finishReason
         self.usage = usage
         self.transcriptMessages = transcriptMessages
+        self.reasoning = reasoning
     }
 }

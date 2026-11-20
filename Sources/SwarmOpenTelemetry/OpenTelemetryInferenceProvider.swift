@@ -325,7 +325,7 @@ private extension OpenTelemetryInferenceProvider {
                                 completedToolCallCount = calls.count
                             case let .usage(tokenUsage):
                                 usage = tokenUsage
-                            case .toolCallPartial, .finishedTurn:
+                            case .toolCallPartial, .finishedTurn, .thinkingChunk, .thinkingCompleted:
                                 break
                             }
                             continuation.yield(update)

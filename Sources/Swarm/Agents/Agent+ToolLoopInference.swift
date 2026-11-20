@@ -76,6 +76,12 @@ extension AgentTurnRunner {
             toolExecutor: toolExecutor
         )
 
+        // Raise the finished thinking for screens (no partials on this path).
+        let thought = joinedThinkingText(response.reasoning)
+        if !thought.isEmpty {
+            await observer?.onThinking(context: nil, agent: agent, thought: thought)
+        }
+
         if emitOutputTokens, response.transcriptMessages.isEmpty, response.toolCalls.isEmpty,
            let content = response.content, !content.isEmpty
         {
@@ -109,6 +115,7 @@ extension AgentTurnRunner {
         var usage: TokenUsage?
         var stopStreaming = false
         var finishedTurn: InferenceResponse?
+        var reasoning: [InferenceReasoning] = []
 
         let stream = provider.streamWithToolCalls(
             messages: messages,
@@ -140,9 +147,23 @@ extension AgentTurnRunner {
 
             case let .finishedTurn(response):
                 finishedTurn = response
+
+            case let .thinkingChunk(fragment):
+                if !fragment.isEmpty {
+                    await observer?.onThinkingPartial(context: nil, agent: agent, partialThought: fragment)
+                }
+
+            case let .thinkingCompleted(block):
+                reasoning.append(block)
             }
 
             if stopStreaming { break }
+        }
+
+        // One finished-thought event per model call, with the whole text.
+        let thought = joinedThinkingText(reasoning)
+        if !thought.isEmpty {
+            await observer?.onThinking(context: nil, agent: agent, thought: thought)
         }
 
         await observer?.onLLMEnd(context: nil, agent: agent, response: content, usage: usage)
@@ -155,7 +176,17 @@ extension AgentTurnRunner {
             content: content.isEmpty ? nil : content,
             toolCalls: parsedToolCalls,
             finishReason: parsedToolCalls.isEmpty ? .completed : .toolCall,
-            usage: usage
+            usage: usage,
+            reasoning: reasoning
         )
+    }
+
+    /// Joins the readable text of finished thinking blocks for display.
+    /// Blocks with empty text (omitted display, redacted) contribute nothing.
+    static func joinedThinkingText(_ reasoning: [InferenceReasoning]) -> String {
+        reasoning
+            .map(\.text)
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
     }
 }

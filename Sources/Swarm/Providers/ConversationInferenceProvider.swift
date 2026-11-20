@@ -172,6 +172,13 @@ public struct InferenceMessage: Sendable, Equatable {
     /// ``content`` only.
     public let attachments: [Attachment]
 
+    /// Finished thinking blocks of an assistant message, in order. Default empty.
+    ///
+    /// Providers that sign thinking (Anthropic) send these back unchanged,
+    /// ahead of the message's text and tool calls. Other roles keep this empty.
+    /// Token counting and prompt flattening ignore it.
+    public let reasoning: [InferenceReasoning]
+
     /// Role projected from ``body``.
     public var role: Role {
         switch body {
@@ -233,9 +240,11 @@ public struct InferenceMessage: Sendable, Equatable {
     /// - Parameters:
     ///   - body: System, user, assistant, or tool payload.
     ///   - attachments: Optional audio or image sidecars. Default empty.
-    public init(body: Body, attachments: [Attachment] = []) {
+    ///   - reasoning: Finished thinking blocks (assistant messages). Default empty.
+    public init(body: Body, attachments: [Attachment] = [], reasoning: [InferenceReasoning] = []) {
         self.body = body
         self.attachments = attachments
+        self.reasoning = reasoning
     }
 
     /// Creates a message from independent role and payload fields.
@@ -274,6 +283,7 @@ public struct InferenceMessage: Sendable, Equatable {
             body = .tool(name: name ?? "tool", content: content, toolCallID: toolCallID)
         }
         self.attachments = attachments
+        reasoning = []
     }
 
     public static func system(_ content: String, attachments: [Attachment] = []) -> InferenceMessage {
@@ -287,9 +297,14 @@ public struct InferenceMessage: Sendable, Equatable {
     public static func assistant(
         _ content: String,
         toolCalls: [ToolCall] = [],
-        attachments: [Attachment] = []
+        attachments: [Attachment] = [],
+        reasoning: [InferenceReasoning] = []
     ) -> InferenceMessage {
-        InferenceMessage(body: .assistant(content, toolCalls: toolCalls), attachments: attachments)
+        InferenceMessage(
+            body: .assistant(content, toolCalls: toolCalls),
+            attachments: attachments,
+            reasoning: reasoning
+        )
     }
 
     public static func tool(
@@ -501,7 +516,8 @@ public extension InferenceProvider {
 ///
 /// Shared adapter toolkit for in-package backends that cannot stream natively:
 /// route the finished turn through this helper so update ordering stays
-/// identical across adapters — `outputChunk`, then `toolCallsCompleted`, then
+/// identical across adapters — `thinkingCompleted` (one per reasoning block,
+/// when the response has any), then `outputChunk`, then `toolCallsCompleted`, then
 /// `usage`, then `finishedTurn` (only when the turn carries a provider-owned
 /// inner transcript), then finish.
 ///
@@ -513,6 +529,9 @@ package func streamFinishedToolTurn(
 ) -> AsyncThrowingStream<InferenceStreamUpdate, Error> {
     StreamHelper.makeTrackedStream { continuation in
         let response = try await generate()
+        for block in response.reasoning {
+            continuation.yield(.thinkingCompleted(block))
+        }
         if let content = response.content, !content.isEmpty {
             continuation.yield(.outputChunk(content))
         }

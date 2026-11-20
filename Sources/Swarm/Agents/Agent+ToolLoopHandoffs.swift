@@ -65,7 +65,8 @@ extension AgentTurnRunner {
         let assistantContent = AgentTurnKernel.assistantContent(for: response)
         turnTranscript.appendAssistant(
             content: assistantContent,
-            toolCalls: response.toolCalls
+            toolCalls: response.toolCalls,
+            reasoning: response.reasoning
         )
 
         let membraneAdapter = request.dependencies.membraneAdapter

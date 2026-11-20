@@ -115,6 +115,8 @@ struct OpenAICompatibleSSEParserTests {
             case .usage: "usage"
             case .toolCallsCompleted: "completed"
             case .finishedTurn: "finished"
+            case .thinkingChunk: "thinking"
+            case .thinkingCompleted: "thought"
             }
         }
         #expect(kinds.contains("usage"))

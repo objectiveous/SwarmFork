@@ -87,8 +87,24 @@ struct AgentTurnTranscript: Sendable, Equatable {
     private(set) var conversationMessages: [Message]
     private(set) var memoryMessages: [MemoryMessage]
 
+    /// Finished thinking blocks of assistant turns, keyed by their index in
+    /// ``conversationMessages``. Kept beside the messages (not in ``Message``)
+    /// so the projections that switch over ``Message`` stay unchanged. Only
+    /// the inference projection carries them; memory does not persist them.
+    private(set) var assistantReasoning: [Int: [InferenceReasoning]] = [:]
+
     var inferenceMessages: [InferenceMessage] {
-        conversationMessages.map(\.inferenceMessage)
+        conversationMessages.enumerated().map { index, message in
+            let projected = message.inferenceMessage
+            guard let reasoning = assistantReasoning[index], !reasoning.isEmpty else {
+                return projected
+            }
+            return InferenceMessage(
+                body: projected.body,
+                attachments: projected.attachments,
+                reasoning: reasoning
+            )
+        }
     }
 
     init(conversationMessages: [Message] = [], memoryMessages: [MemoryMessage] = []) {
@@ -99,8 +115,12 @@ struct AgentTurnTranscript: Sendable, Equatable {
     mutating func appendAssistant(
         content: String,
         toolCalls: [InferenceResponse.ParsedToolCall] = [],
-        structuredOutput: StructuredOutputResult? = nil
+        structuredOutput: StructuredOutputResult? = nil,
+        reasoning: [InferenceReasoning] = []
     ) {
+        if !reasoning.isEmpty {
+            assistantReasoning[conversationMessages.count] = reasoning
+        }
         conversationMessages.append(.assistant(content, toolCalls: toolCalls))
         memoryMessages.append(
             SwarmTranscriptCodec.encodeMessage(
@@ -163,6 +183,10 @@ struct AgentTurnTranscript: Sendable, Equatable {
             }
         }
 
+        let firstOwnedIndex = conversationMessages.count
+        for (offset, message) in messages.enumerated() where !message.reasoning.isEmpty {
+            assistantReasoning[firstOwnedIndex + offset] = message.reasoning
+        }
         conversationMessages.append(contentsOf: ownedConversation)
         memoryMessages.append(contentsOf: ownedMemory)
     }
