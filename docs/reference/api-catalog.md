@@ -472,6 +472,7 @@ Refresh the header counts with `scripts/ci/refresh-api-catalog-header.sh`. That 
 | 161 | func | public | ContextProfile.balanced(maxContextTokens:) | `public static func balanced(maxContextTokens: Int) -> ContextProfile` |
 | 178 | func | public | ContextProfile.heavy(maxContextTokens:) | `public static func heavy(maxContextTokens: Int) -> ContextProfile` |
 | 195 | func | public | ContextProfile.strict4k(template:) | `public static func strict4k(template: ContextProfile.Strict4kTemplate = .default) -> ContextProfile` |
+| 301 | func | public | ContextProfile.modelWindow(contextTokens:outputReserveTokens:protocolOverheadReserveTokens:estimateMargin:) | `public static func modelWindow(contextTokens: Int, outputReserveTokens: Int, protocolOverheadReserveTokens: Int = 0, estimateMargin: Double = 1) -> ContextProfile` |
 | 232 | var | public | ContextProfile.preset | `public let preset: ContextProfile.Preset` |
 | 235 | var | public | ContextProfile.maxContextTokens | `public let maxContextTokens: Int` |
 | 238 | var | public | ContextProfile.maxTotalContextTokens | `public let maxTotalContextTokens: Int` |
@@ -1512,6 +1513,7 @@ Refresh the header counts with `scripts/ci/refresh-api-catalog-header.sh`. That 
 | 219 | func | public | Memory.shouldImportSessionHistory() | `public func shouldImportSessionHistory() async -> Bool` |
 | 226 | var | public | Memory.trackedSessionMemory | `public nonisolated var trackedSessionMemory: (any Memory)? { get }` |
 | 231 | var | public | Memory.allowsAutomaticSessionSeeding | `public nonisolated var allowsAutomaticSessionSeeding: Bool { get }` |
+| 243 | var | public | Memory.replaysConversation | `public nonisolated var replaysConversation: Bool { get }` |
 | 238 | var | public | Memory.memoryPromptMetadata | `public nonisolated var memoryPromptMetadata: MemoryPromptMetadata? { get }` |
 | 274 | func | public | MemoryMessage.formatContext(_:tokenLimit:tokenEstimator:) | `public static func formatContext(_ messages: [MemoryMessage], tokenLimit: Int, tokenEstimator: any TokenEstimator = CharacterBasedTokenEstimator.shared) -> String` |
 | 318 | func | public | MemoryMessage.formatContext(_:tokenLimit:separator:tokenEstimator:) | `public static func formatContext(_ messages: [MemoryMessage], tokenLimit: Int, separator: String, tokenEstimator: any TokenEstimator = CharacterBasedTokenEstimator.shared) -> String` |
@@ -1565,6 +1567,7 @@ Refresh the header counts with `scripts/ci/refresh-api-catalog-header.sh`. That 
 | 66 | func | public | ConversationMemory.context(for:tokenLimit:) | `public func context(for _: String, tokenLimit: Int) async -> String` |
 | 70 | func | public | ConversationMemory.allMessages() | `public func allMessages() async -> [MemoryMessage]` |
 | 74 | func | public | ConversationMemory.clear() | `public func clear() async` |
+| 80 | var | public | ConversationMemory.replaysConversation | `public nonisolated var replaysConversation: Bool { get }` |
 | 96 | func | public | ConversationMemory.addAll(_:) | `public func addAll(_ newMessages: [MemoryMessage]) async` |
 | 108 | func | public | ConversationMemory.getRecentMessages(_:) | `public func getRecentMessages(_ n: Int) async -> [MemoryMessage]` |
 | 116 | func | public | ConversationMemory.getOldestMessages(_:) | `public func getOldestMessages(_ n: Int) async -> [MemoryMessage]` |
@@ -1774,6 +1777,7 @@ Refresh the header counts with `scripts/ci/refresh-api-catalog-header.sh`. That 
 | 98 | func | public | PersistentMemory.context(for:tokenLimit:) | `public func context(for _: String, tokenLimit: Int) async -> String` |
 | 107 | func | public | PersistentMemory.allMessages() | `public func allMessages() async -> [MemoryMessage]` |
 | 116 | func | public | PersistentMemory.clear() | `public func clear() async` |
+| 126 | var | public | PersistentMemory.replaysConversation | `public nonisolated var replaysConversation: Bool { get }` |
 | 130 | func | public | PersistentMemory.getRecentMessages(limit:) | `public func getRecentMessages(limit: Int) async -> [MemoryMessage]` |
 | 145 | func | public | PersistentMemory.addAll(_:) | `public func addAll(_ messages: [MemoryMessage]) async` |
 

@@ -21,6 +21,7 @@ package struct MemoryHooks: Sendable {
     var memoryPriority: MemoryPriorityHint?
     var trackedSessionMemory: (any Memory)?
     var allowsAutomaticSessionSeeding: Bool
+    var replaysConversation: Bool
     var shouldImportSessionHistory: (@Sendable () async -> Bool)?
     var importSessionHistory: (@Sendable ([MemoryMessage]) async -> Void)?
 
@@ -33,6 +34,7 @@ package struct MemoryHooks: Sendable {
         memoryPriority: MemoryPriorityHint? = nil,
         trackedSessionMemory: (any Memory)? = nil,
         allowsAutomaticSessionSeeding: Bool = true,
+        replaysConversation: Bool = false,
         shouldImportSessionHistory: (@Sendable () async -> Bool)? = nil,
         importSessionHistory: (@Sendable ([MemoryMessage]) async -> Void)? = nil
     ) {
@@ -44,6 +46,7 @@ package struct MemoryHooks: Sendable {
         self.memoryPriority = memoryPriority
         self.trackedSessionMemory = trackedSessionMemory
         self.allowsAutomaticSessionSeeding = allowsAutomaticSessionSeeding
+        self.replaysConversation = replaysConversation
         self.shouldImportSessionHistory = shouldImportSessionHistory
         self.importSessionHistory = importSessionHistory
     }
@@ -66,6 +69,7 @@ package extension MemoryHooks {
         hooks.memoryPriority = metadata?.priority
         hooks.trackedSessionMemory = memory.trackedSessionMemory
         hooks.allowsAutomaticSessionSeeding = memory.allowsAutomaticSessionSeeding
+        hooks.replaysConversation = memory.replaysConversation
 
         hooks.beginMemorySession = { await memory.beginMemorySession() }
         hooks.endMemorySession = { await memory.endMemorySession() }

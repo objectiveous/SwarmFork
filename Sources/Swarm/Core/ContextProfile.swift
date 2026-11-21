@@ -282,6 +282,53 @@ public struct ContextProfile: Sendable, Equatable {
         )
     }
 
+    /// A balanced profile sized to one model's context window.
+    ///
+    /// The input budget is what the window leaves after the reply and anything sent
+    /// beside the messages (tool definitions, the chat template), divided by
+    /// `estimateMargin`. Unless the provider supplies a real counter, Swarm counts a
+    /// prompt with ``EstimatedPromptTokenCounter`` (about four characters per token),
+    /// which runs low on JSON, identifiers and code. Pass the worst ratio of real to
+    /// estimated tokens measured for the model's tokenizer, so a prompt the estimate
+    /// fits also fits the model; pass 1 when the provider counts real tokens. The
+    /// difference is recorded as ``safetyMarginTokens``.
+    ///
+    /// - Parameters:
+    ///   - contextTokens: The model's context window, in its own tokens.
+    ///   - outputReserveTokens: Tokens kept free for the reply.
+    ///   - protocolOverheadReserveTokens: Tokens sent beside the messages.
+    ///   - estimateMargin: Real tokens per counted token at worst; at least 1.
+    public static func modelWindow(
+        contextTokens: Int,
+        outputReserveTokens: Int,
+        protocolOverheadReserveTokens: Int = 0,
+        estimateMargin: Double = 1
+    ) -> ContextProfile {
+        let available = max(1, Strict4kTemplate.saturatingSubtract(
+            contextTokens,
+            max(0, outputReserveTokens),
+            max(0, protocolOverheadReserveTokens)
+        ))
+        let margin = estimateMargin.isFinite ? max(1, estimateMargin) : 1
+        let inputTokens = max(1, Int(Double(available) / margin))
+        return ContextProfile(
+            preset: .balanced,
+            maxContextTokens: inputTokens,
+            workingTokenRatio: 0.55,
+            memoryTokenRatio: 0.30,
+            toolIOTokenRatio: 0.15,
+            summaryTokenRatio: 0.50,
+            maxToolOutputTokens: 1000,
+            maxRetrievedItems: 3,
+            maxRetrievedItemTokens: 400,
+            summaryCadenceTurns: 3,
+            summaryTriggerUtilization: 0.65,
+            outputReserveTokens: outputReserveTokens,
+            protocolOverheadReserveTokens: protocolOverheadReserveTokens,
+            safetyMarginTokens: available - inputTokens
+        )
+    }
+
     /// Creates a balanced preset with a custom context window size.
     public static func balanced(maxContextTokens: Int) -> ContextProfile {
         ContextProfile(

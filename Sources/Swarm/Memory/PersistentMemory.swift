@@ -122,6 +122,9 @@ public actor PersistentMemory: Memory {
         }
     }
 
+    /// `true`: the context is the stored conversation, which a session already supplies.
+    public nonisolated var replaysConversation: Bool { true }
+
     // MARK: - Additional Methods
 
     /// Retrieves the N most recent messages.

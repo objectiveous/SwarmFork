@@ -385,10 +385,13 @@ struct AgentTurnRunner: Sendable {
             membrane: request.dependencies.membraneEnvironment
         )
 
-        // Retrieve relevant context from memory (enables RAG for VectorMemory)
+        // Retrieve relevant context from memory (enables RAG for VectorMemory).
+        // With a session, a memory that replays the conversation would repeat
+        // the session history, so its context is left out.
         let memoryHooks = request.dependencies.memoryHooks
         var memoryContext = ""
-        if let memory = request.dependencies.memory {
+        let sessionSuppliesConversation = request.session != nil && memoryHooks.replaysConversation
+        if let memory = request.dependencies.memory, !sessionSuppliesConversation {
             let contextProfile = agent.configuration.effectiveContextProfile
             let tokenLimit = contextProfile.memoryTokenLimit
             let input = request.input

@@ -757,6 +757,10 @@ public protocol Memory: Actor, Sendable {
     // Automatic seeding policy (default: true)
     nonisolated var allowsAutomaticSessionSeeding: Bool { get }
 
+    // Context is the conversation itself; skipped when a session supplies
+    // the history (default: false; true for ConversationMemory, PersistentMemory)
+    nonisolated var replaysConversation: Bool { get }
+
     // Prompt labels for retrieved context (default: nil)
     nonisolated var memoryPromptMetadata: MemoryPromptMetadata? { get }
 }

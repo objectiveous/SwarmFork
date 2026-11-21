@@ -76,6 +76,9 @@ public actor ConversationMemory: Memory {
         messages.removeAll()
     }
 
+    /// `true`: the context is the recent conversation, which a session already supplies.
+    public nonisolated var replaysConversation: Bool { true }
+
     // MARK: Private
 
     /// Token estimator for context retrieval.

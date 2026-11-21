@@ -205,7 +205,9 @@ extension Agent {
             try replayTranscript.validateReplayCompatibility()
 
             // Seed memory with session history once when the memory is eligible.
-            if let activeMemory, session != nil {
+            // A memory that replays the conversation is not seeded: the session
+            // already supplies those turns.
+            if let activeMemory, session != nil, !memoryHooks.replaysConversation {
                 await activeMemory.seedSessionHistoryIfNeeded(sessionHistory)
             }
 

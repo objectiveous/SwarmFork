@@ -230,6 +230,18 @@ public protocol Memory: Actor, Sendable {
     /// Default: `true`. Return `false` to opt out of automatic seeding.
     nonisolated var allowsAutomaticSessionSeeding: Bool { get }
 
+    /// Whether this memory's context is the conversation itself: its recent
+    /// turns, in order, rather than knowledge recalled for the query.
+    ///
+    /// When a run is given a ``Session``, the session already supplies the
+    /// conversation history. The agent then neither seeds a memory that
+    /// replays the conversation from the session nor adds its context to the
+    /// system message, so the model reads each earlier turn once.
+    ///
+    /// Default: `false`. ``ConversationMemory`` and ``PersistentMemory``
+    /// return `true`.
+    nonisolated var replaysConversation: Bool { get }
+
     /// Prompt metadata describing how retrieved memory context should be
     /// presented to the model.
     ///

@@ -53,6 +53,9 @@ public extension Memory {
 
     /// Default policy: automatic session seeding is allowed.
     nonisolated var allowsAutomaticSessionSeeding: Bool { true }
+
+    /// Default: memories recall context rather than replay the conversation.
+    nonisolated var replaysConversation: Bool { false }
 }
 
 public extension Memory {

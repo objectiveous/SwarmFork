@@ -30,13 +30,18 @@ enum ContextWindow {
     /// Token counts are measured on ``InferenceMessage/flattenPrompt(_:)``. The injected
     /// counter receives that labeled string, not raw message bodies.
     ///
-    /// When `alwaysKeepLast` is true, the latest message is kept. A leading `.system`
-    /// message is kept when `protectLeadingSystem` is true; if system + last still
-    /// overflow, last (and if needed system text) is truncated so a non-empty system
-    /// remains.
+    /// Messages leave as exchanges (see ``exchanges(in:)``): an assistant message with
+    /// tool calls and the tool results that follow it are kept or dropped together, so a
+    /// result never survives without its call, nor a call without its results.
+    ///
+    /// When `alwaysKeepLast` is true, the latest exchange is kept, and so is the latest
+    /// user message before it: a question survives the lookups made to answer it. A
+    /// leading `.system` message is kept when `protectLeadingSystem` is true; if those
+    /// still overflow, their text is truncated from the newest message backward (and if
+    /// needed the system text) so a non-empty system remains.
     ///
     /// When `alwaysKeepLast` is false, eviction is drop-oldest only (no truncation).
-    /// At least one message is always retained.
+    /// At least one exchange is always retained.
     static func fit(
         messages: [InferenceMessage],
         policy: Policy,
@@ -51,58 +56,79 @@ enum ContextWindow {
             return messages
         }
 
+        let hasProtectedSystem = policy.protectLeadingSystem && messages[0].role == .system
+        let protectedSystem = hasProtectedSystem ? messages[0] : nil
+        let units = exchanges(in: Array(messages.dropFirst(hasProtectedSystem ? 1 : 0)))
+
         if !policy.alwaysKeepLast {
             return await dropOldest(
-                messages,
+                units,
+                protectedSystem: protectedSystem,
                 maxTokens: maxTokens,
-                protectLeadingSystem: policy.protectLeadingSystem,
                 countTokens: countTokens
             )
         }
 
-        let lastIndex = messages.count - 1
-        let last = messages[lastIndex]
-        let hasProtectedSystem = policy.protectLeadingSystem && messages[0].role == .system
-        let protectedSystem = hasProtectedSystem ? messages[0] : nil
-        let lastIsProtectedSystem = lastIndex == 0 && hasProtectedSystem
-
-        var droppable = Array(messages.dropLast())
-        if hasProtectedSystem, !droppable.isEmpty {
-            droppable.removeFirst()
+        guard let tailIndex = units.indices.last else {
+            // The protected system is the only message.
+            return [await truncatedMessage(
+                messages[0],
+                prefixedBy: [],
+                maxTokens: maxTokens,
+                keepNonEmpty: true,
+                countTokens: countTokens
+            )]
         }
 
-        var kept: [InferenceMessage] = []
-        while let candidate = droppable.popLast() {
-            let next = assemble(
-                protectedSystem: protectedSystem,
-                older: [candidate] + kept,
-                last: last,
-                lastIsProtectedSystem: lastIsProtectedSystem
-            )
+        var pinned: Set<Int> = [tailIndex]
+        if units[tailIndex].first?.role != .user,
+           let questionIndex = units.lastIndex(where: { $0.first?.role == .user })
+        {
+            pinned.insert(questionIndex)
+        }
+
+        var kept = pinned
+        for index in units.indices.reversed() where !pinned.contains(index) {
+            let candidate = kept.union([index])
+            let next = assemble(protectedSystem: protectedSystem, units: units, keeping: candidate)
             if await tokenCount(of: next, countTokens: countTokens) <= maxTokens {
-                kept.insert(candidate, at: 0)
+                kept = candidate
             } else {
                 break
             }
         }
 
-        let windowed = assemble(
-            protectedSystem: protectedSystem,
-            older: kept,
-            last: last,
-            lastIsProtectedSystem: lastIsProtectedSystem
-        )
+        let windowed = assemble(protectedSystem: protectedSystem, units: units, keeping: kept)
         if await tokenCount(of: windowed, countTokens: countTokens) <= maxTokens {
             return windowed
         }
 
-        return await fitProtectedSystemAndLast(
+        return await fitProtectedSystemAndTail(
             protectedSystem,
-            last: last,
-            lastIsProtectedSystem: lastIsProtectedSystem,
+            tail: units.indices.filter { pinned.contains($0) }.flatMap { units[$0] },
             maxTokens: maxTokens,
             countTokens: countTokens
         )
+    }
+
+    /// Splits messages into the units that are kept or dropped whole: an assistant
+    /// message with tool calls together with the tool results that directly follow it,
+    /// and every other message on its own. A tool result with no call before it stands
+    /// alone.
+    static func exchanges(in messages: [InferenceMessage]) -> [[InferenceMessage]] {
+        var units: [[InferenceMessage]] = []
+        for message in messages {
+            if message.role == .tool,
+               let opener = units.last?.first,
+               opener.role == .assistant,
+               !opener.toolCalls.isEmpty
+            {
+                units[units.count - 1].append(message)
+            } else {
+                units.append([message])
+            }
+        }
+        return units
     }
 
     /// Longest character prefix of `text` whose token count is within `maxTokens`.
@@ -228,20 +254,22 @@ enum ContextWindow {
     }
 
     private static func dropOldest(
-        _ messages: [InferenceMessage],
+        _ units: [[InferenceMessage]],
+        protectedSystem: InferenceMessage?,
         maxTokens: Int,
-        protectLeadingSystem: Bool,
         countTokens: @Sendable (String) async -> Int
     ) async -> [InferenceMessage] {
-        var remaining = messages
-        let protectedCount = (protectLeadingSystem && remaining.first?.role == .system) ? 1 : 0
-        let floorCount = max(protectedCount, 1)
-        while remaining.count > floorCount,
-            await tokenCount(of: remaining, countTokens: countTokens) > maxTokens
-        {
-            remaining.remove(at: protectedCount)
+        var remaining = units
+        let floorCount = protectedSystem == nil ? 1 : 0
+        func joined() -> [InferenceMessage] {
+            (protectedSystem.map { [$0] } ?? []) + remaining.flatMap { $0 }
         }
-        return remaining
+        while remaining.count > floorCount,
+            await tokenCount(of: joined(), countTokens: countTokens) > maxTokens
+        {
+            remaining.removeFirst()
+        }
+        return joined()
     }
 
     private static func tokenCount(
@@ -253,54 +281,37 @@ enum ContextWindow {
 
     private static func assemble(
         protectedSystem: InferenceMessage?,
-        older: [InferenceMessage],
-        last: InferenceMessage,
-        lastIsProtectedSystem: Bool
+        units: [[InferenceMessage]],
+        keeping kept: Set<Int>
     ) -> [InferenceMessage] {
-        if lastIsProtectedSystem {
-            return protectedSystem.map { [$0] } ?? [last]
-        }
-        if let protectedSystem {
-            return [protectedSystem] + older + [last]
-        }
-        return older + [last]
+        let older = units.indices.filter { kept.contains($0) }.flatMap { units[$0] }
+        return (protectedSystem.map { [$0] } ?? []) + older
     }
 
-    /// Fits a protected leading system and the latest turn under `maxTokens`.
-    /// Prefers a full system + truncated last (head-preserving). Only clips
-    /// system text when the system message itself cannot share the budget.
-    private static func fitProtectedSystemAndLast(
+    /// Fits a protected leading system and the kept tail (the latest exchange and the
+    /// question before it) under `maxTokens`. Prefers a full system + truncated tail
+    /// (head-preserving). Only clips system text when the system message itself cannot
+    /// share the budget.
+    private static func fitProtectedSystemAndTail(
         _ protectedSystem: InferenceMessage?,
-        last: InferenceMessage,
-        lastIsProtectedSystem: Bool,
+        tail: [InferenceMessage],
         maxTokens: Int,
         countTokens: @Sendable (String) async -> Int
     ) async -> [InferenceMessage] {
-        if lastIsProtectedSystem, let system = protectedSystem {
-            return [await truncatedMessage(
-                system,
-                prefixedBy: [],
-                maxTokens: maxTokens,
-                keepNonEmpty: true,
-                countTokens: countTokens
-            )]
-        }
-
         if let system = protectedSystem {
-            let clippedLast = await truncatedMessage(
-                last,
+            let clippedTail = await truncatedTail(
+                tail,
                 prefixedBy: [system],
                 maxTokens: maxTokens,
-                keepNonEmpty: false,
                 countTokens: countTokens
             )
-            let withFullSystem = [system, clippedLast]
+            let withFullSystem = [system] + clippedTail
             if await tokenCount(of: withFullSystem, countTokens: countTokens) <= maxTokens {
                 return withFullSystem
             }
 
-            // System itself overflows even with an empty last. Keep a non-empty
-            // system head and a last-turn tail, matching the flattened-prompt contract.
+            // System itself overflows even with an empty tail. Keep a non-empty
+            // system head and a tail, matching the flattened-prompt contract.
             let tailShare = max(16, maxTokens / 3)
             let headShare = max(16, maxTokens - tailShare)
             let clippedSystem = await truncatedMessage(
@@ -310,28 +321,46 @@ enum ContextWindow {
                 keepNonEmpty: true,
                 countTokens: countTokens
             )
-            let fittedLast = await truncatedMessage(
-                last,
+            return [clippedSystem] + (await truncatedTail(
+                tail,
                 prefixedBy: [clippedSystem],
+                maxTokens: maxTokens,
+                countTokens: countTokens
+            ))
+        }
+
+        return await truncatedTail(tail, prefixedBy: [], maxTokens: maxTokens, countTokens: countTokens)
+    }
+
+    /// Truncates tail messages from the newest backward until `prefix + tail` fits,
+    /// so tool results are cut before the question they answer.
+    private static func truncatedTail(
+        _ tail: [InferenceMessage],
+        prefixedBy prefix: [InferenceMessage],
+        maxTokens: Int,
+        countTokens: @Sendable (String) async -> Int
+    ) async -> [InferenceMessage] {
+        var result = tail
+        for index in result.indices.reversed() {
+            if await tokenCount(of: prefix + result, countTokens: countTokens) <= maxTokens {
+                break
+            }
+            result[index] = await truncatedMessage(
+                result[index],
+                prefixedBy: prefix + result[..<index],
+                followedBy: Array(result[(index + 1)...]),
                 maxTokens: maxTokens,
                 keepNonEmpty: false,
                 countTokens: countTokens
             )
-            return [clippedSystem, fittedLast]
         }
-
-        return [await truncatedMessage(
-            last,
-            prefixedBy: [],
-            maxTokens: maxTokens,
-            keepNonEmpty: false,
-            countTokens: countTokens
-        )]
+        return result
     }
 
     private static func truncatedMessage(
         _ message: InferenceMessage,
         prefixedBy prefix: [InferenceMessage],
+        followedBy suffix: [InferenceMessage] = [],
         maxTokens: Int,
         keepNonEmpty: Bool,
         countTokens: @Sendable (String) async -> Int
@@ -344,7 +373,7 @@ enum ContextWindow {
             maxTokens: maxTokens,
             minimum: minimum,
             countTokens: { candidate in
-                let next = prefix + [replacingContent(of: message, with: candidate)]
+                let next = prefix + [replacingContent(of: message, with: candidate)] + suffix
                 return await countTokens(InferenceMessage.flattenPrompt(next))
             }
         )
@@ -376,9 +405,10 @@ enum PromptEnvelope {
     static let omittedToolResult = "Tool result omitted to fit context."
 
     /// Drops oldest non-system messages until the conversation fits the profile budget.
-    /// Roles stay. The latest message is always kept. A leading `.system` message is
-    /// never dropped; if system + last still overflow, last (and if needed system
-    /// text) is truncated so a non-empty system remains.
+    /// Roles stay. A tool call and its results leave together. The latest exchange and
+    /// the user message it answers are always kept. A leading `.system` message is
+    /// never dropped; if those still overflow, their text (and if needed system text)
+    /// is truncated so a non-empty system remains.
     ///
     /// Over-budget tool bodies are stubbed first (all but the last two), then the
     /// shared ``ContextWindow`` core fits the remainder. This runs for every
