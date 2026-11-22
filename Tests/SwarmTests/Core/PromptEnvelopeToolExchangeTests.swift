@@ -54,7 +54,7 @@ struct PromptEnvelopeToolExchangeTests {
 
     @Test("a result that ends the conversation keeps its call and the question it answers")
     func latestResultKeepsCallAndQuestion() async {
-        // The one-4el7.12 case: after a lookup, the last message is the tool result.
+        // After a lookup the last message is the tool result; the question must stay.
         let messages: [InferenceMessage] = [
             .system("Stay."),
             .user("old-question \(padding)"),
@@ -111,6 +111,7 @@ struct PromptEnvelopeToolExchangeTests {
         #expect(fitted[1].content == "needle-question")
         #expect(fitted[3].content == "first-result")
         #expect(fitted[4].content.hasPrefix("huge-result"))
+        #expect(fitted[4].content.hasSuffix(ContextWindow.truncationNote))
         #expect(fitted[4].content.count < messages[4].content.count)
         #expect(characters(in: fitted) <= budget)
     }
@@ -144,6 +145,101 @@ struct PromptEnvelopeToolExchangeTests {
         ]
 
         #expect(ContextWindow.exchanges(in: messages).map(\.count) == [1, 1, 3, 1])
+    }
+
+    @Test("parallel results too big together are cut to one shared length, each marked")
+    func parallelResultsAreCutEvenly() async {
+        let messages: [InferenceMessage] = [
+            .system("Stay."),
+            .user("needle-question"),
+            .assistant("", toolCalls: [call("a", "lookup"), call("b", "lookup")]),
+            .tool(name: "lookup", content: "older-result \(padding)", toolCallID: "a"),
+            .tool(name: "lookup", content: "newer-result \(padding)", toolCallID: "b"),
+        ]
+        let budget = characters(in: messages) - 400
+
+        let fitted = await fit(messages, budget: budget)
+
+        expectExchangesIntact(fitted)
+        #expect(fitted[1].content == "needle-question")
+        #expect(fitted[3].content.hasPrefix("older-result"))
+        #expect(fitted[4].content.hasPrefix("newer-result"))
+        #expect(fitted[3].content.hasSuffix(ContextWindow.truncationNote))
+        #expect(fitted[4].content.hasSuffix(ContextWindow.truncationNote))
+        #expect(abs(fitted[3].content.count - fitted[4].content.count) <= 1)
+        #expect(characters(in: fitted) <= budget)
+    }
+
+    @Test("cutting an assistant message keeps its signed thinking")
+    func truncationKeepsReasoning() async {
+        let thinking = InferenceReasoning(text: "think", signature: "sig", type: "reasoning.summary")
+        let messages: [InferenceMessage] = [
+            .system("Stay."),
+            .user("needle-question"),
+            .assistant("long-answer \(padding)", reasoning: [thinking]),
+        ]
+
+        let fitted = await fit(messages, budget: characters(in: messages) - 200)
+
+        #expect(fitted.count == 3)
+        #expect(fitted[2].content.count < messages[2].content.count)
+        #expect(fitted[2].reasoning == [thinking])
+    }
+
+    @Test("the budget counts tool-call arguments and thinking text")
+    func budgetCountsArgumentsAndReasoning() async {
+        let arguments: [String: SendableValue] = ["query": .string("bulky-argument \(padding)")]
+        let callMessage = InferenceMessage.assistant(
+            "",
+            toolCalls: [InferenceMessage.ToolCall(id: "a", name: "lookup", arguments: arguments)],
+            reasoning: [InferenceReasoning(text: "thinking-text \(padding)")]
+        )
+        let text = ContextWindow.budgetText(of: [callMessage])
+        #expect(text.contains("bulky-argument"))
+        #expect(text.contains("thinking-text"))
+        #expect(!InferenceMessage.flattenPrompt([callMessage]).contains("bulky-argument"))
+
+        let messages: [InferenceMessage] = [
+            .system("Stay."),
+            .user("old-question"),
+            callMessage,
+            .tool(name: "lookup", content: "old-result", toolCallID: "a"),
+            .assistant("old-answer"),
+            .user("needle-latest"),
+        ]
+        // The labeled prompt alone fits; with the arguments and thinking it does not.
+        let budget = InferenceMessage.flattenPrompt(messages).count
+        let fitted = await fit(messages, budget: budget)
+
+        expectExchangesIntact(fitted)
+        #expect(!fitted.contains { $0.content == "old-result" })
+        #expect(fitted.last?.content == "needle-latest")
+    }
+
+    @Test("results of the latest exchange are never stubbed, however many run in parallel")
+    func latestParallelResultsAreNotStubbed() async {
+        let profile = ContextProfile.modelWindow(contextTokens: 450, outputReserveTokens: 0)
+        let messages: [InferenceMessage] = [
+            .system("Stay."),
+            .user("old-question"),
+            .assistant("", toolCalls: [call("o", "lookup")]),
+            .tool(name: "lookup", content: "old-result \(padding)\(padding)", toolCallID: "o"),
+            .assistant("old-answer"),
+            .user("needle-question"),
+            .assistant("", toolCalls: [call("a", "lookup"), call("b", "lookup"), call("c", "lookup")]),
+            .tool(name: "lookup", content: "first-result \(padding)", toolCallID: "a"),
+            .tool(name: "lookup", content: "second-result \(padding)", toolCallID: "b"),
+            .tool(name: "lookup", content: "third-result \(padding)", toolCallID: "c"),
+        ]
+
+        let fitted = await PromptEnvelope.enforce(messages: messages, profile: profile)
+
+        expectExchangesIntact(fitted)
+        let latest = fitted.suffix(3)
+        #expect(latest.allSatisfy { $0.role == .tool && $0.content != PromptEnvelope.omittedToolResult })
+        #expect(latest.map { String($0.content.prefix(5)) } == ["first", "secon", "third"])
+        #expect(fitted.contains { $0.content == "needle-question" })
+        #expect(!fitted.contains { $0.content.hasPrefix("old-result") })
     }
 
     // MARK: - A size limit for each model, with a margin for the estimate
@@ -185,8 +281,7 @@ struct PromptEnvelopeToolExchangeTests {
 
     @Test("with the margin, a prompt whose real tokens run 1.92 times the estimate still fits the window")
     func marginCoversAnEstimateThatRunsLow() async {
-        // 1.92 is the worst real-to-estimated ratio measured with Inkling 2 Mini's tokenizer
-        // on Studio tool results; whole Studio sessions peaked at 1.72.
+        // JSON-heavy tool traffic can run about 1.9 real tokens per estimated token.
         let worstRatio = 1.92
         let window = 8_192
         let output = 1_024
@@ -225,15 +320,15 @@ struct PromptEnvelopeToolExchangeTests {
         await PromptTokenBudgeting.countTokens(in: InferenceMessage.flattenPrompt(messages))
     }
 
-    /// A Studio-shaped conversation: each turn asks, looks something up, and answers.
+    /// A tool-using conversation: each turn asks, looks something up, and answers.
     private func longConversation(turns: Int) -> [InferenceMessage] {
         var messages: [InferenceMessage] = [.system("You model what the user describes.")]
         for turn in 0 ..< turns {
             let id = "call-\(turn)"
             messages.append(.user("question \(turn): what links meetings to decisions?"))
-            messages.append(.assistant("", toolCalls: [call(id, "inspect_studio_workbook")]))
+            messages.append(.assistant("", toolCalls: [call(id, "inspect_workbook")]))
             messages.append(.tool(
-                name: "inspect_studio_workbook",
+                name: "inspect_workbook",
                 content: "{\"item\":\"\(UUID().uuidString)\",\"turn\":\(turn),\"notes\":\"\(padding)\"}",
                 toolCallID: id
             ))

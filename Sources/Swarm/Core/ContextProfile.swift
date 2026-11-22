@@ -282,6 +282,10 @@ public struct ContextProfile: Sendable, Equatable {
         )
     }
 
+    /// Below this many input tokens, ``modelWindow(contextTokens:outputReserveTokens:protocolOverheadReserveTokens:estimateMargin:)``
+    /// logs a warning: the reserves leave too little room for a conversation.
+    public static let minimumUsefulInputTokens = 1_024
+
     /// A balanced profile sized to one model's context window.
     ///
     /// The input budget is what the window leaves after the reply and anything sent
@@ -311,6 +315,11 @@ public struct ContextProfile: Sendable, Equatable {
         ))
         let margin = estimateMargin.isFinite ? max(1, estimateMargin) : 1
         let inputTokens = max(1, Int(Double(available) / margin))
+        if inputTokens < minimumUsefulInputTokens {
+            Log.agents.warning(
+                "ContextProfile.modelWindow: \(inputTokens) input tokens left of a \(contextTokens)-token window after reserving \(outputReserveTokens) for output and \(protocolOverheadReserveTokens) for overhead (margin \(margin)); conversations will be cut hard"
+            )
+        }
         return ContextProfile(
             preset: .balanced,
             maxContextTokens: inputTokens,

@@ -176,7 +176,7 @@ public struct InferenceMessage: Sendable, Equatable {
     ///
     /// Providers that sign thinking (Anthropic) send these back unchanged,
     /// ahead of the message's text and tool calls. Other roles keep this empty.
-    /// Token counting and prompt flattening ignore it.
+    /// Prompt flattening ignores it; context budgeting counts its text.
     public let reasoning: [InferenceReasoning]
 
     /// Role projected from ``body``.

@@ -472,7 +472,8 @@ Refresh the header counts with `scripts/ci/refresh-api-catalog-header.sh`. That 
 | 161 | func | public | ContextProfile.balanced(maxContextTokens:) | `public static func balanced(maxContextTokens: Int) -> ContextProfile` |
 | 178 | func | public | ContextProfile.heavy(maxContextTokens:) | `public static func heavy(maxContextTokens: Int) -> ContextProfile` |
 | 195 | func | public | ContextProfile.strict4k(template:) | `public static func strict4k(template: ContextProfile.Strict4kTemplate = .default) -> ContextProfile` |
-| 301 | func | public | ContextProfile.modelWindow(contextTokens:outputReserveTokens:protocolOverheadReserveTokens:estimateMargin:) | `public static func modelWindow(contextTokens: Int, outputReserveTokens: Int, protocolOverheadReserveTokens: Int = 0, estimateMargin: Double = 1) -> ContextProfile` |
+| 287 | var | public | ContextProfile.minimumUsefulInputTokens | `public static let minimumUsefulInputTokens: Int` |
+| 305 | func | public | ContextProfile.modelWindow(contextTokens:outputReserveTokens:protocolOverheadReserveTokens:estimateMargin:) | `public static func modelWindow(contextTokens: Int, outputReserveTokens: Int, protocolOverheadReserveTokens: Int = 0, estimateMargin: Double = 1) -> ContextProfile` |
 | 232 | var | public | ContextProfile.preset | `public let preset: ContextProfile.Preset` |
 | 235 | var | public | ContextProfile.maxContextTokens | `public let maxContextTokens: Int` |
 | 238 | var | public | ContextProfile.maxTotalContextTokens | `public let maxTotalContextTokens: Int` |
@@ -1970,6 +1971,7 @@ Refresh the header counts with `scripts/ci/refresh-api-catalog-header.sh`. That 
 | 103 | func | public | SwiftDataMemory.context(for:tokenLimit:) | `public func context(for _: String, tokenLimit: Int) async -> String` |
 | 108 | func | public | SwiftDataMemory.allMessages() | `public func allMessages() async -> [MemoryMessage]` |
 | 120 | func | public | SwiftDataMemory.clear() | `public func clear() async` |
+| 122 | var | public | SwiftDataMemory.replaysConversation | `public nonisolated var replaysConversation: Bool { get }` |
 | 174 | func | public | SwiftDataMemory.addAll(_:) | `public func addAll(_ messages: [MemoryMessage]) async` |
 | 195 | func | public | SwiftDataMemory.getRecentMessages(_:) | `public func getRecentMessages(_ n: Int) async -> [MemoryMessage]` |
 | 215 | func | public | SwiftDataMemory.allConversationIds() | `public func allConversationIds() async -> [String]` |

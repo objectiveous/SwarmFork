@@ -758,7 +758,8 @@ public protocol Memory: Actor, Sendable {
     nonisolated var allowsAutomaticSessionSeeding: Bool { get }
 
     // Context is the conversation itself; skipped when a session supplies
-    // the history (default: false; true for ConversationMemory, PersistentMemory)
+    // the history (default: false; true for ConversationMemory, PersistentMemory,
+    // SwiftDataMemory)
     nonisolated var replaysConversation: Bool { get }
 
     // Prompt labels for retrieved context (default: nil)

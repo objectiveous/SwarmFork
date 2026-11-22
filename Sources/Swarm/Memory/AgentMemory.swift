@@ -238,8 +238,8 @@ public protocol Memory: Actor, Sendable {
     /// replays the conversation from the session nor adds its context to the
     /// system message, so the model reads each earlier turn once.
     ///
-    /// Default: `false`. ``ConversationMemory`` and ``PersistentMemory``
-    /// return `true`.
+    /// Default: `false`. ``ConversationMemory``, ``PersistentMemory`` and
+    /// `SwiftDataMemory` return `true`.
     nonisolated var replaysConversation: Bool { get }
 
     /// Prompt metadata describing how retrieved memory context should be

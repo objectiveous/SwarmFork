@@ -27,8 +27,9 @@ enum ContextWindow {
 
     /// Drops oldest unprotected messages until the conversation fits `policy.maxTokens`.
     ///
-    /// Token counts are measured on ``InferenceMessage/flattenPrompt(_:)``. The injected
-    /// counter receives that labeled string, not raw message bodies.
+    /// Token counts are measured on ``budgetText(of:)``: the labeled prompt plus tool-call
+    /// arguments and reasoning text. The injected counter receives that string, not raw
+    /// message bodies.
     ///
     /// Messages leave as exchanges (see ``exchanges(in:)``): an assistant message with
     /// tool calls and the tool results that follow it are kept or dropped together, so a
@@ -36,9 +37,11 @@ enum ContextWindow {
     ///
     /// When `alwaysKeepLast` is true, the latest exchange is kept, and so is the latest
     /// user message before it: a question survives the lookups made to answer it. A
-    /// leading `.system` message is kept when `protectLeadingSystem` is true; if those
-    /// still overflow, their text is truncated from the newest message backward (and if
-    /// needed the system text) so a non-empty system remains.
+    /// leading `.system` message is kept when `protectLeadingSystem` is true. If those
+    /// still overflow, the exchange's tool results are cut to one shared length first,
+    /// then other kept text from the newest message backward, and only then the system
+    /// text, so a non-empty system remains. A cut message ends with ``truncationNote``
+    /// when the note fits.
     ///
     /// When `alwaysKeepLast` is false, eviction is drop-oldest only (no truncation).
     /// At least one exchange is always retained.
@@ -129,6 +132,30 @@ enum ContextWindow {
             }
         }
         return units
+    }
+
+    /// Appended to a message whose text was cut to fit, when it fits.
+    static let truncationNote = "\n[truncated to fit context]"
+
+    /// The text whose token count stands for `messages` in the budget: the labeled
+    /// prompt of ``InferenceMessage/flattenPrompt(_:)`` plus what its labels leave out
+    /// but a provider still sends, namely each tool call's arguments and any reasoning
+    /// text. Used for counting only, never sent.
+    static func budgetText(of messages: [InferenceMessage]) -> String {
+        messages.map { message in
+            var parts = [message.flattenedPromptLine]
+            parts += message.toolCalls.compactMap { call in
+                guard !call.arguments.isEmpty else { return nil }
+                let object = SendableValue.dictionary(call.arguments).toJSONObject()
+                guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
+                    return nil
+                }
+                return String(decoding: data, as: UTF8.self)
+            }
+            parts += message.reasoning.map(\.text).filter { !$0.isEmpty }
+            return parts.joined(separator: "\n")
+        }
+        .joined(separator: "\n\n")
     }
 
     /// Longest character prefix of `text` whose token count is within `maxTokens`.
@@ -276,7 +303,7 @@ enum ContextWindow {
         of messages: [InferenceMessage],
         countTokens: @Sendable (String) async -> Int
     ) async -> Int {
-        await countTokens(InferenceMessage.flattenPrompt(messages))
+        await countTokens(budgetText(of: messages))
     }
 
     private static func assemble(
@@ -332,16 +359,44 @@ enum ContextWindow {
         return await truncatedTail(tail, prefixedBy: [], maxTokens: maxTokens, countTokens: countTokens)
     }
 
-    /// Truncates tail messages from the newest backward until `prefix + tail` fits,
-    /// so tool results are cut before the question they answer.
+    /// Cuts the kept tail until `prefix + tail` fits. Tool results are cut first, all to
+    /// one shared length so the newest is not emptied before older ones; then other
+    /// messages with text, from the newest backward, so the question is cut last.
     private static func truncatedTail(
         _ tail: [InferenceMessage],
         prefixedBy prefix: [InferenceMessage],
         maxTokens: Int,
         countTokens: @Sendable (String) async -> Int
     ) async -> [InferenceMessage] {
+        if await tokenCount(of: prefix + tail, countTokens: countTokens) <= maxTokens {
+            return tail
+        }
+
         var result = tail
-        for index in result.indices.reversed() {
+        let resultIndices = tail.indices.filter { tail[$0].role == .tool && !tail[$0].content.isEmpty }
+        if let longest = resultIndices.map({ tail[$0].content.count }).max() {
+            var lower = 1
+            var upper = longest - 1
+            var best: [InferenceMessage]?
+            while lower <= upper {
+                let cap = (lower + upper) / 2
+                let candidate = capping(tail, at: resultIndices, to: cap)
+                if await tokenCount(of: prefix + candidate, countTokens: countTokens) <= maxTokens {
+                    best = candidate
+                    lower = cap + 1
+                } else {
+                    upper = cap - 1
+                }
+            }
+            if let best {
+                return best
+            }
+            for index in resultIndices {
+                result[index] = replacingContent(of: result[index], with: "")
+            }
+        }
+
+        for index in result.indices.reversed() where !result[index].content.isEmpty {
             if await tokenCount(of: prefix + result, countTokens: countTokens) <= maxTokens {
                 break
             }
@@ -357,6 +412,21 @@ enum ContextWindow {
         return result
     }
 
+    /// Cuts the content of the messages at `indices` to at most `cap` characters, each
+    /// cut one ending in ``truncationNote``.
+    private static func capping(
+        _ messages: [InferenceMessage],
+        at indices: [Int],
+        to cap: Int
+    ) -> [InferenceMessage] {
+        var result = messages
+        for index in indices where result[index].content.count > cap {
+            let content = result[index].content
+            result[index] = replacingContent(of: result[index], with: String(content.prefix(cap)) + truncationNote)
+        }
+        return result
+    }
+
     private static func truncatedMessage(
         _ message: InferenceMessage,
         prefixedBy prefix: [InferenceMessage],
@@ -365,18 +435,27 @@ enum ContextWindow {
         keepNonEmpty: Bool,
         countTokens: @Sendable (String) async -> Int
     ) async -> InferenceMessage {
+        @Sendable func count(_ content: String) async -> Int {
+            await countTokens(budgetText(of: prefix + [replacingContent(of: message, with: content)] + suffix))
+        }
+        if await count(message.content) <= maxTokens {
+            return message
+        }
+
+        // Prefer a cut that says it was cut.
+        let marked = await longestPrefix(of: message.content, maxTokens: maxTokens) { candidate in
+            await count(candidate + truncationNote)
+        }
+        if !marked.isEmpty, await count(marked + truncationNote) <= maxTokens {
+            return replacingContent(of: message, with: marked + truncationNote)
+        }
+
         let minimum = keepNonEmpty && !message.content.isEmpty
             ? String(message.content.prefix(1))
             : ""
-        let clipped = await longestPrefix(
-            of: message.content,
-            maxTokens: maxTokens,
-            minimum: minimum,
-            countTokens: { candidate in
-                let next = prefix + [replacingContent(of: message, with: candidate)] + suffix
-                return await countTokens(InferenceMessage.flattenPrompt(next))
-            }
-        )
+        let clipped = await longestPrefix(of: message.content, maxTokens: maxTokens, minimum: minimum) { candidate in
+            await count(candidate)
+        }
         return replacingContent(of: message, with: clipped)
     }
 
@@ -389,7 +468,8 @@ enum ContextWindow {
         case let .assistant(_, toolCalls):
             InferenceMessage(
                 body: .assistant(content, toolCalls: toolCalls),
-                attachments: message.attachments
+                attachments: message.attachments,
+                reasoning: message.reasoning
             )
         case let .tool(name, _, toolCallID):
             InferenceMessage(
@@ -410,8 +490,9 @@ enum PromptEnvelope {
     /// never dropped; if those still overflow, their text (and if needed system text)
     /// is truncated so a non-empty system remains.
     ///
-    /// Over-budget tool bodies are stubbed first (all but the last two), then the
-    /// shared ``ContextWindow`` core fits the remainder. This runs for every
+    /// Over budget, tool results are stubbed first, except in the last two exchanges
+    /// that hold results (so the latest exchange is never stubbed), then the shared
+    /// ``ContextWindow`` core fits the remainder. This runs for every
     /// profile, not only ``ContextProfile/strict4k``.
     static func enforce(messages: [InferenceMessage], profile: ContextProfile) async -> [InferenceMessage] {
         guard !messages.isEmpty else {
@@ -421,7 +502,7 @@ enum PromptEnvelope {
         let budget = profile.budget.maxInputTokens
         var working = messages
         if await tokenCount(of: working) > budget {
-            working = stubOlderToolResults(working, keepLast: 2)
+            working = stubOlderToolResults(working, keepingLastExchanges: 2)
         }
 
         return await ContextWindow.fit(
@@ -443,27 +524,31 @@ enum PromptEnvelope {
         return [last]
     }
 
+    /// Stubs the tool results of every exchange but the last `keepingLastExchanges` that
+    /// hold results. An exchange is stubbed whole, never in part.
     private static func stubOlderToolResults(
         _ messages: [InferenceMessage],
-        keepLast: Int
+        keepingLastExchanges keep: Int
     ) -> [InferenceMessage] {
-        let toolIndices = messages.indices.filter { messages[$0].role == .tool }
-        guard toolIndices.count > keepLast else {
+        let units = ContextWindow.exchanges(in: messages)
+        let withResults = units.indices.filter { units[$0].contains { $0.role == .tool } }
+        guard withResults.count > keep else {
             return messages
         }
-        let kept = Set(toolIndices.suffix(keepLast))
-        return messages.enumerated().map { index, message in
-            guard case let .tool(name, _, toolCallID) = message.body, kept.contains(index) == false else {
-                return message
+        let stubbed = Set(withResults.dropLast(keep))
+        return units.indices.flatMap { index in
+            guard stubbed.contains(index) else { return units[index] }
+            return units[index].map { message in
+                guard case let .tool(name, _, toolCallID) = message.body else { return message }
+                return InferenceMessage(
+                    body: .tool(name: name, content: omittedToolResult, toolCallID: toolCallID),
+                    attachments: message.attachments
+                )
             }
-            return InferenceMessage(
-                body: .tool(name: name, content: omittedToolResult, toolCallID: toolCallID),
-                attachments: message.attachments
-            )
         }
     }
 
     private static func tokenCount(of messages: [InferenceMessage]) async -> Int {
-        await PromptTokenBudgeting.countTokens(in: InferenceMessage.flattenPrompt(messages))
+        await PromptTokenBudgeting.countTokens(in: ContextWindow.budgetText(of: messages))
     }
 }
